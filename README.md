@@ -157,6 +157,12 @@ container's apt. So updates happen only when you (or the timer) run them.
 ./install-claude-desktop-distrobox.sh --update --full   # app + container base-OS security patches
 ```
 
+The update reports the version change (`old → new`, or "already the newest version").
+**A running app keeps using the old build until it's restarted** — Electron stays resident,
+and launching again would just refocus the old window. If the app is running when a new
+version lands, `--update` offers to restart it for you (stopping the container; your
+data/login are untouched — just relaunch afterwards).
+
 **Automatically (recommended)** — a weekly systemd *user* timer that runs `--update --full`:
 
 ```bash
@@ -243,6 +249,10 @@ It's a **user** timer (no root), and every run is logged to the journal for audi
   processes). If it truly won't show, try `--sandbox` off (default) and check `journalctl --user`.
 - **Sign-in doesn't complete** — rare, since login uses the `claude://` scheme, not a localhost
   callback. If it happens, relax the network: `--remove` then reinstall with `--share-net`.
+- **Updated but the app still shows the old version / old models** — the old process was
+  still running (updates replace files on disk; they don't restart the app). Run
+  `podman stop claude-desktop`, then relaunch. `--update` now detects this and offers
+  the restart; timer runs log a warning in the journal instead of killing your session.
 - **Cowork/Code can't see my files** — that's the isolation working. Reinstall with
   `--share <dir>` for the folders you want it to access.
 - **Benign log noise** — `Failed to connect to ... system_bus_socket` and missing
