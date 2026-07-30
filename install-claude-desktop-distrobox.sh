@@ -174,8 +174,17 @@ emit_update_inner() {
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 echo "==> [container] Updating claude-desktop..."
+ver_before="$(dpkg-query -W -f='${Version}' claude-desktop 2>/dev/null || echo none)"
 sudo apt-get update -y
 sudo apt-get install -y --only-upgrade claude-desktop
+ver_after="$(dpkg-query -W -f='${Version}' claude-desktop 2>/dev/null || echo none)"
+if [ "$ver_before" = "$ver_after" ]; then
+  echo "==> [container] claude-desktop is already the newest version ($ver_after)."
+  echo "META:UPDATED=0"
+else
+  echo "==> [container] claude-desktop updated: $ver_before -> $ver_after"
+  echo "META:UPDATED=1"
+fi
 if [ "${FULL_UPGRADE:-0}" = "1" ]; then
   echo "==> [container] Applying base OS security patches (apt upgrade)..."
   sudo apt-get upgrade -y
@@ -524,7 +533,27 @@ case "$ACTION" in
     else
       log "Updating Claude inside container '$NAME' ..."
     fi
-    distrobox enter --name "$NAME" -- env FULL_UPGRADE="$FULL_UPGRADE" bash -c "$(emit_update_inner)"
+    UPDATE_OUT="$(distrobox enter --name "$NAME" -- env FULL_UPGRADE="$FULL_UPGRADE" bash -c "$(emit_update_inner)" | tee /dev/stderr)"
+    UPDATED="$(printf '%s\n' "$UPDATE_OUT" | sed -n 's/^META:UPDATED=//p' | head -n1)"
+
+    # The upgrade only replaces files on disk. If the app is still running it is
+    # the OLD build (Electron stays resident and `distrobox enter` would just
+    # refocus it), so it must be restarted for the update to take effect.
+    if [[ "$UPDATED" == "1" ]] && "$MGR" exec "$NAME" pgrep -f claude-desktop >/dev/null 2>&1; then
+      if [[ -t 0 ]]; then
+        read -r -p "Claude Desktop is still running the old version. Restart it now? [Y/n] " reply || reply=""
+        if [[ ! "$reply" =~ ^[Nn] ]]; then
+          log "Stopping container '$NAME' (and the old app) ..."
+          distrobox stop --yes "$NAME"
+          log "Stopped. Relaunch Claude from your app menu or with: claude-desktop"
+        else
+          warn "Claude keeps running the OLD version until restarted (podman stop $NAME, then relaunch)."
+        fi
+      else
+        warn "Update installed but Claude is running the OLD version — restart it to apply:"
+        warn "  podman stop $NAME   (then relaunch Claude)"
+      fi
+    fi
     log "Update complete."
     ;;
 
