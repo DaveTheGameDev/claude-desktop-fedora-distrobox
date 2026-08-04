@@ -96,6 +96,11 @@ Actions:
   --update         Update Claude inside the existing container.
                    Add --full to also apt-upgrade the container's base OS.
   --remove         Remove the container, the host launcher, and the timer.
+  --refresh-launcher
+                   Rebuild only the host launcher, .desktop entry and icons
+                   from the app already installed in the container. Use this
+                   if the dock shows a second, icon-less entry for the running
+                   window instead of reusing the launcher's icon.
   --install-timer  Enable a weekly systemd *user* timer that auto-updates
                    Claude + the container's base OS (runs --update --full).
   --remove-timer   Disable and remove that timer.
@@ -196,6 +201,8 @@ INNER
 }
 
 # Prints machine-readable facts about the installed app (binary, .desktop, icon).
+# CLAUDE_ICON= lines list every themed icon the app ships, so the host can
+# rebuild a proper hicolor theme tree instead of dropping one loose file.
 emit_meta_inner() {
   cat <<'INNER'
 #!/usr/bin/env bash
@@ -203,7 +210,11 @@ set -euo pipefail
 bin_path="$(command -v claude-desktop || true)"
 desktop_src="$(find /usr/share/applications -maxdepth 1 -iname '*claude*.desktop' 2>/dev/null | head -n1 || true)"
 icon_name=""
-[ -n "$desktop_src" ] && icon_name="$(grep -m1 '^Icon=' "$desktop_src" | cut -d= -f2- || true)"
+wmclass=""
+if [ -n "$desktop_src" ]; then
+  icon_name="$(grep -m1 '^Icon=' "$desktop_src" | cut -d= -f2- || true)"
+  wmclass="$(grep -m1 '^StartupWMClass=' "$desktop_src" | cut -d= -f2- || true)"
+fi
 icon_file=""
 if [ -n "$icon_name" ]; then
   if [ -f "$icon_name" ]; then
@@ -219,6 +230,13 @@ fi
 echo "META:CLAUDE_BIN=${bin_path}"
 echo "META:CLAUDE_DESKTOP_SRC=${desktop_src}"
 echo "META:CLAUDE_ICON_FILE=${icon_file}"
+echo "META:CLAUDE_ICON_NAME=${icon_name}"
+echo "META:CLAUDE_WMCLASS=${wmclass}"
+if [ -n "$icon_name" ] && [ ! -f "$icon_name" ]; then
+  find /usr/share/icons/hicolor -path '*/apps/*' \
+       \( -iname "${icon_name}.png" -o -iname "${icon_name}.svg" \) 2>/dev/null \
+    | sort | sed 's/^/META:CLAUDE_ICON=/'
+fi
 INNER
 }
 
@@ -277,6 +295,7 @@ remove_timer() {
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --update)         ACTION="update"; shift ;;
+    --refresh-launcher) ACTION="refresh-launcher"; shift ;;
     --remove)         ACTION="remove"; shift ;;
     --install-timer)  ACTION="install-timer"; shift ;;
     --remove-timer)   ACTION="remove-timer"; shift ;;
@@ -352,12 +371,159 @@ distrobox_supports_netns() {
 }
 
 # ---------------------------------------------------------------------------
+# Launcher metadata (queried from the container; consumed by build_host_launcher)
+# ---------------------------------------------------------------------------
+CLAUDE_BIN=""; DESKTOP_SRC=""; ICON_FILE=""; ICON_NAME=""; WMCLASS_SRC=""
+declare -a ICON_SRCS=()
+
+collect_launcher_meta() {
+  local out
+  out="$(distrobox enter --name "$NAME" -- bash -c "$(emit_meta_inner)" 2>/dev/null || true)"
+  CLAUDE_BIN="$(printf   '%s\n' "$out" | sed -n 's/^META:CLAUDE_BIN=//p'         | head -n1)"
+  DESKTOP_SRC="$(printf  '%s\n' "$out" | sed -n 's/^META:CLAUDE_DESKTOP_SRC=//p' | head -n1)"
+  ICON_FILE="$(printf    '%s\n' "$out" | sed -n 's/^META:CLAUDE_ICON_FILE=//p'   | head -n1)"
+  ICON_NAME="$(printf    '%s\n' "$out" | sed -n 's/^META:CLAUDE_ICON_NAME=//p'   | head -n1)"
+  WMCLASS_SRC="$(printf  '%s\n' "$out" | sed -n 's/^META:CLAUDE_WMCLASS=//p'     | head -n1)"
+  mapfile -t ICON_SRCS < <(printf '%s\n' "$out" | sed -n 's/^META:CLAUDE_ICON=//p')
+  # Icon= should be a bare theme name, but tolerate a path or an extension.
+  ICON_NAME="$(basename -- "$ICON_NAME")"
+  case "$ICON_NAME" in *.png|*.svg|*.xpm) ICON_NAME="${ICON_NAME%.*}" ;; esac
+}
+
+# The window's real WM_CLASS, read off a live window. This is the authoritative
+# value; when the app happens to be running we prefer it over anything guessed.
+# X11/XWayland only — a pure-Wayland compositor exposes no such query.
+detect_wmclass_from_window() {
+  command -v xprop >/dev/null 2>&1 || return 1
+  [[ -n "${DISPLAY:-}" ]] || return 1
+  local ids id cls
+  ids="$(xprop -root _NET_CLIENT_LIST 2>/dev/null | sed -n 's/.*# //p' | tr -d ' ' | tr ',' ' ')" || return 1
+  [[ -n "$ids" ]] || return 1
+  for id in $ids; do
+    cls="$(xprop -id "$id" WM_CLASS 2>/dev/null | sed -n 's/^WM_CLASS(STRING) = .*, "\(.*\)"$/\1/p')"
+    [[ -n "$cls" ]] || continue
+    case "${cls,,}" in *claude*) printf '%s\n' "$cls"; return 0 ;; esac
+  done
+  return 1
+}
+
+# Best-effort pixel size of a PNG, read straight from the IHDR header, so an
+# untagged icon still lands in a sane hicolor bucket. Echoes e.g. "256x256".
+png_dimensions() {
+  local f="$1" w h
+  read -r w h < <(od -An -N8 -j16 -tu4 --endian=big -- "$f" 2>/dev/null) || return 1
+  [[ "$w" =~ ^[0-9]+$ && "$h" =~ ^[0-9]+$ && $w -gt 0 && $h -gt 0 ]] || return 1
+  printf '%sx%s\n' "$w" "$h"
+}
+
+# ---------------------------------------------------------------------------
+# Icons
+#
+# A loose ~/.local/share/icons/claude-desktop.png is enough for the launcher
+# (the .desktop can point at it by absolute path) but NOT for a window: when
+# the shell cannot tie a window to a .desktop entry it falls back to looking up
+# the window's WM_CLASS *as an icon name* in the icon theme, and a loose file
+# lives in no theme. That lookup fails and the dock draws a broken-image tile.
+# So install the icons into a real hicolor tree, under every name the shell
+# might ask for: the app's own icon name, our .desktop id, and the WM_CLASS.
+# ---------------------------------------------------------------------------
+ICON_MANIFEST="$HOME/.local/share/claude-desktop-launcher.icons"
+ICON_KEY=""            # theme name to put in Icon=; empty if nothing installed
+
+install_app_icons() {
+  local wmclass="$1"
+  ICON_KEY=""
+  local -a names=()
+  local n src rel sz ext dest tmp dim count=0
+
+  add_icon_name() {
+    local want="$1" have
+    [[ -n "$want" ]] || return 0
+    for have in ${names[@]+"${names[@]}"}; do [[ "$have" == "$want" ]] && return 0; done
+    names+=("$want")
+  }
+  add_icon_name "$ICON_NAME"
+  add_icon_name "claude-desktop"          # our .desktop id — the shell's other fallback
+  add_icon_name "$wmclass"
+  add_icon_name "${wmclass,,}"
+
+  : > "$ICON_MANIFEST"
+  tmp="$(mktemp)"
+
+  # Every themed source the app ships, in every size it ships it in.
+  local -a sources=(${ICON_SRCS[@]+"${ICON_SRCS[@]}"})
+  # No themed icons (icon shipped as a bare path or a pixmap)? Use the single
+  # file we found and work its size out ourselves.
+  [[ ${#sources[@]} -eq 0 && -n "$ICON_FILE" ]] && sources=("$ICON_FILE")
+
+  for src in ${sources[@]+"${sources[@]}"}; do
+    "$MGR" cp "$NAME:$src" "$tmp" 2>/dev/null || continue
+    ext="${src##*.}"; ext="${ext,,}"
+    sz=""
+    if [[ "$src" == */icons/hicolor/* ]]; then
+      rel="${src#*/icons/hicolor/}"; sz="${rel%%/*}"
+    fi
+    if [[ ! "$sz" =~ ^([0-9]+x[0-9]+|scalable)$ ]]; then
+      if [[ "$ext" == svg ]]; then
+        sz="scalable"
+      elif dim="$(png_dimensions "$tmp")"; then
+        sz="$dim"
+      else
+        sz="256x256"
+      fi
+    fi
+    for n in ${names[@]+"${names[@]}"}; do
+      dest="$HOST_ICON_DIR/hicolor/$sz/apps/$n.$ext"
+      mkdir -p "$(dirname "$dest")"
+      cp -f "$tmp" "$dest" || continue
+      printf '%s\n' "$dest" >> "$ICON_MANIFEST"
+      count=$((count + 1))
+    done
+  done
+  rm -f "$tmp"
+  unset -f add_icon_name
+
+  if [[ $count -eq 0 ]]; then
+    rm -f "$ICON_MANIFEST"
+    return 1
+  fi
+
+  # Refresh the theme cache if this tree has one; GTK falls back to scanning the
+  # directories when it does not, so a failure here is not fatal.
+  command -v gtk-update-icon-cache >/dev/null 2>&1 && \
+    gtk-update-icon-cache -q -f -t "$HOST_ICON_DIR/hicolor" 2>/dev/null || true
+  touch "$HOST_ICON_DIR/hicolor" 2>/dev/null || true
+
+  ICON_KEY="${names[0]}"
+  log "Installed $count icon file(s) under $HOST_ICON_DIR/hicolor (names: ${names[*]})."
+}
+
+# ---------------------------------------------------------------------------
 # Host-side launcher (works with an isolated home, unlike distrobox-export)
 # ---------------------------------------------------------------------------
 build_host_launcher() {
-  local claude_bin="$1" desktop_src="$2" icon_file="$3"
-  local flags=""
-  [[ $SANDBOX -eq 1 ]] || flags="--no-sandbox"
+  local claude_bin="$CLAUDE_BIN" desktop_src="$DESKTOP_SRC" icon_file="$ICON_FILE"
+
+  # The window class the shell will see. Prefer a live window (ground truth),
+  # then the app's own StartupWMClass, then our .desktop id — and then FORCE it
+  # with Chromium's --class so the running window and StartupWMClass below can
+  # never disagree. Without that match the shell treats the window as an unknown
+  # app: a second, un-iconified dock entry beside the launcher. Startup
+  # notification cannot rescue it either, since the activation token does not
+  # survive the trip through `distrobox enter`.
+  local wmclass
+  if wmclass="$(detect_wmclass_from_window)"; then
+    log "Detected running window class: $wmclass"
+  elif [[ -n "$WMCLASS_SRC" ]]; then
+    wmclass="$WMCLASS_SRC"
+  else
+    wmclass="claude-desktop"
+  fi
+
+  local -a appflags=()
+  [[ $SANDBOX -eq 1 ]] || appflags+=("--no-sandbox")
+  appflags+=("--class=$wmclass")
+  local flags; flags="$(printf '%q ' "${appflags[@]}")"
 
   mkdir -p "$(dirname "$HOST_BIN")" "$(dirname "$HOST_DESKTOP")" "$HOST_ICON_DIR"
 
@@ -379,31 +545,49 @@ build_host_launcher() {
   } > "$HOST_BIN"
   chmod +x "$HOST_BIN"
 
-  # 2) Copy the app icon out of the container (podman cp is mount-independent).
+  # 2) Copy the app icons out of the container (podman cp is mount-independent)
+  #    into a proper hicolor theme, so window icon lookups resolve too.
+  install_app_icons "$wmclass" || true
   local host_icon=""
-  if [[ -n "$icon_file" ]]; then
-    local ext="${icon_file##*.}"
-    host_icon="$HOST_ICON_DIR/claude-desktop.$ext"
-    if "$MGR" cp "$NAME:$icon_file" "$host_icon" 2>/dev/null; then
-      log "Copied icon: $host_icon"
-    else
-      warn "Could not copy the app icon; the launcher will use a generic icon."
-      host_icon=""
+  if [[ -z "$ICON_KEY" ]]; then
+    # Themed install failed — fall back to one loose file addressed by path.
+    if [[ -n "$icon_file" ]]; then
+      local ext="${icon_file##*.}"
+      host_icon="$HOST_ICON_DIR/claude-desktop.$ext"
+      if "$MGR" cp "$NAME:$icon_file" "$host_icon" 2>/dev/null; then
+        log "Copied icon: $host_icon"
+      else
+        warn "Could not copy the app icon; the launcher will use a generic icon."
+        host_icon=""
+      fi
     fi
   fi
+  # Icon= prefers the theme name: the shell then picks the size it needs, and
+  # the same name resolves for an unmatched window.
+  local icon_value="${ICON_KEY:-$host_icon}"
 
   # 3) Host .desktop: start from the app's own file (keeps Name/MimeType/
-  #    StartupWMClass) and rewrite Exec/Icon to point at our wrapper.
+  #    Categories) and rewrite Exec/Icon/StartupWMClass to match our wrapper.
   log "Writing desktop entry: $HOST_DESKTOP"
   local tmp; tmp="$(mktemp)"
   if [[ -n "$desktop_src" ]] && "$MGR" cp "$NAME:$desktop_src" "$tmp" 2>/dev/null; then
+    # Swap only the program in each Exec= (the main entry and any
+    # [Desktop Action ...]), so per-action arguments such as --new-window
+    # survive; the in-container path they used does not exist on the host.
     sed -i \
-      -e "s|^Exec=.*|Exec=${HOST_BIN} %U|" \
+      -e "s|^Exec=[^ ]*|Exec=${HOST_BIN}|" \
       -e '/^DBusActivatable=/d' \
       -e '/^TryExec=/d' \
       "$tmp"
-    if [[ -n "$host_icon" ]]; then
-      sed -i -e "s|^Icon=.*|Icon=${host_icon}|" "$tmp"
+    if [[ -n "$icon_value" ]]; then
+      sed -i -e "s|^Icon=.*|Icon=${icon_value}|" "$tmp"
+    fi
+    if grep -q '^StartupWMClass=' "$tmp"; then
+      sed -i -e "s|^StartupWMClass=.*|StartupWMClass=${wmclass}|" "$tmp"
+    else
+      # Insert into [Desktop Entry], not at EOF — the file may end in a
+      # [Desktop Action ...] group, where the key would be ignored.
+      sed -i -e "0,/^\[Desktop Entry\]/s|^\[Desktop Entry\]|[Desktop Entry]\nStartupWMClass=${wmclass}|" "$tmp"
     fi
     cp "$tmp" "$HOST_DESKTOP"
   else
@@ -411,7 +595,8 @@ build_host_launcher() {
     {
       printf '[Desktop Entry]\nType=Application\nName=Claude\n'
       printf 'Exec=%s %%U\n' "$HOST_BIN"
-      [[ -n "$host_icon" ]] && printf 'Icon=%s\n' "$host_icon"
+      [[ -n "$icon_value" ]] && printf 'Icon=%s\n' "$icon_value"
+      printf 'StartupWMClass=%s\n' "$wmclass"
       printf 'Terminal=false\nCategories=Utility;Network;\n'
     } > "$HOST_DESKTOP"
   fi
@@ -438,7 +623,23 @@ build_host_launcher() {
 
 remove_host_launcher() {
   rm -f "$HOST_BIN" "$HOST_DESKTOP" 2>/dev/null || true
-  rm -f "$HOST_ICON_DIR"/claude-desktop.* 2>/dev/null || true
+  # Themed icons, by manifest — only ever the files this script wrote.
+  if [[ -f "$ICON_MANIFEST" ]]; then
+    local p
+    while IFS= read -r p; do
+      [[ -n "$p" && "$p" == "$HOST_ICON_DIR/hicolor/"* ]] && rm -f "$p"
+    done < "$ICON_MANIFEST"
+    rm -f "$ICON_MANIFEST"
+    # Drop our theme cache if nothing else is left in the tree, then prune the
+    # directories we created — any other theme content stays put.
+    if [[ -z "$(find "$HOST_ICON_DIR/hicolor" -type f ! -name 'icon-theme.cache' -print -quit 2>/dev/null)" ]]; then
+      rm -f "$HOST_ICON_DIR/hicolor/icon-theme.cache"
+    fi
+    find "$HOST_ICON_DIR/hicolor" -type d -empty -delete 2>/dev/null || true
+  fi
+  rm -f "$HOST_ICON_DIR"/claude-desktop.* 2>/dev/null || true   # pre-manifest installs
+  command -v gtk-update-icon-cache >/dev/null 2>&1 && \
+    gtk-update-icon-cache -q -f -t "$HOST_ICON_DIR/hicolor" 2>/dev/null || true
   command -v update-desktop-database >/dev/null 2>&1 && \
     update-desktop-database "$(dirname "$HOST_DESKTOP")" 2>/dev/null || true
 }
@@ -504,13 +705,10 @@ case "$ACTION" in
     distrobox enter --name "$NAME" -- bash -c "$(emit_install_inner)"
 
     log "Collecting launcher metadata from the container ..."
-    META_OUT="$(distrobox enter --name "$NAME" -- bash -c "$(emit_meta_inner)" 2>/dev/null || true)"
-    CLAUDE_BIN="$(printf '%s\n' "$META_OUT" | sed -n 's/^META:CLAUDE_BIN=//p'         | head -n1)"
-    DESKTOP_SRC="$(printf '%s\n' "$META_OUT" | sed -n 's/^META:CLAUDE_DESKTOP_SRC=//p' | head -n1)"
-    ICON_FILE="$(printf '%s\n' "$META_OUT"  | sed -n 's/^META:CLAUDE_ICON_FILE=//p'   | head -n1)"
+    collect_launcher_meta
     [[ -n "$CLAUDE_BIN" ]] || die "claude-desktop not found in the container after install."
 
-    build_host_launcher "$CLAUDE_BIN" "$DESKTOP_SRC" "$ICON_FILE"
+    build_host_launcher
 
     echo
     log "Done! Search \"Claude\" in your application menu, or run: claude-desktop"
@@ -536,6 +734,18 @@ case "$ACTION" in
     UPDATE_OUT="$(distrobox enter --name "$NAME" -- env FULL_UPGRADE="$FULL_UPGRADE" bash -c "$(emit_update_inner)" | tee /dev/stderr)"
     UPDATED="$(printf '%s\n' "$UPDATE_OUT" | sed -n 's/^META:UPDATED=//p' | head -n1)"
 
+    # Rebuild the host launcher while the container is still up, so a new
+    # icon, name or window class from the package lands on the host too.
+    if [[ "$UPDATED" == "1" ]]; then
+      log "Refreshing the host launcher ..."
+      collect_launcher_meta
+      if [[ -n "$CLAUDE_BIN" ]]; then
+        build_host_launcher
+      else
+        warn "Could not read launcher metadata; left the existing launcher alone."
+      fi
+    fi
+
     # The upgrade only replaces files on disk. If the app is still running it is
     # the OLD build (Electron stays resident and `distrobox enter` would just
     # refocus it), so it must be restarted for the update to take effect.
@@ -555,6 +765,15 @@ case "$ACTION" in
       fi
     fi
     log "Update complete."
+    ;;
+
+  refresh-launcher)
+    container_exists "$NAME" || die "No container named '$NAME'. Run without arguments to install first."
+    log "Rebuilding the host launcher, desktop entry and icons ..."
+    collect_launcher_meta
+    [[ -n "$CLAUDE_BIN" ]] || die "claude-desktop not found in container '$NAME'."
+    build_host_launcher
+    log "Done. Log out and back in (or restart the shell) if the dock still shows the old icon."
     ;;
 
   remove)
