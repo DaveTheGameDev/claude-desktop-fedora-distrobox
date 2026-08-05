@@ -65,9 +65,12 @@ The installer (`install-claude-desktop-distrobox.sh`):
    mounts *the sandbox* as the home and **never mounts your real `/home/you`**.
 4. **Isolates the network** with `--unshare-netns`: full outbound internet (to reach Claude), but
    the app can't reach services on your host's `localhost`.
-5. **Wires it into your desktop** by generating a host launcher, `.desktop` entry, and icon
+5. **Wires it into your desktop** by generating a host launcher, `.desktop` entry, and icons
    (not `distrobox-export`, which breaks under an isolated home), and registers the app's
    `claude://` URL scheme so browser OAuth sign-in routes back to the containerized app.
+   The app's icons are copied out into a real `~/.local/share/icons/hicolor/` theme and the
+   window class is pinned so the running window folds into the launcher's dock entry rather
+   than appearing beside it as an unknown app.
 
 ## Security & trust model
 
@@ -194,6 +197,7 @@ Add `--purge` only if you also want the sandbox home gone.
 | *(no args)* | Create the container and install Claude + host launcher (hardened defaults). |
 | `--update` | Update the Claude app inside the container. |
 | `--update --full` | Also `apt upgrade` the container's base OS (security patches). |
+| `--refresh-launcher` | Rebuild just the host launcher, `.desktop` entry and icons from the app already in the container (fixes a dock entry with a missing icon). |
 | `--remove` | Remove container, host launcher, and timer. |
 | `--remove --purge` | …and delete the sandbox home (login/data). |
 | `--install-timer` | Enable the weekly auto-update systemd user timer. |
@@ -253,6 +257,14 @@ It's a **user** timer (no root), and every run is logged to the journal for audi
   still running (updates replace files on disk; they don't restart the app). Run
   `podman stop claude-desktop`, then relaunch. `--update` now detects this and offers
   the restart; timer runs log a warning in the journal instead of killing your session.
+- **The dock shows a second, icon-less entry when the app is running** — the shell couldn't tie the
+  window to the launcher's `.desktop` entry, so it drew an unknown-app tile next to it. Fix it with
+  `./install-claude-desktop-distrobox.sh --refresh-launcher` (no reinstall, no data loss), then log
+  out and back in. That rebuild pins the window class (`--class` + a matching `StartupWMClass`) and
+  installs the icons into `~/.local/share/icons/hicolor/` under every name the shell might look up,
+  so the window and the launcher share one dock entry — and one icon. If you still see two, run it
+  again *while the app is open*: it then reads the real `WM_CLASS` off the live window (X11/XWayland)
+  and uses that.
 - **Cowork/Code can't see my files** — that's the isolation working. Reinstall with
   `--share <dir>` for the folders you want it to access.
 - **Benign log noise** — `Failed to connect to ... system_bus_socket` and missing
