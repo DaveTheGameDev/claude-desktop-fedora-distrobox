@@ -13,7 +13,7 @@ jobs:
     container: fedora:latest
     steps:
       - name: Install tools
-        run: dnf install -y --setopt=install_weak_deps=False git rpm-build rpmdevtools rpmlint desktop-file-utils ShellCheck gh
+        run: dnf install -y --setopt=install_weak_deps=False --disablerepo='*openh264*' git rpm-build rpmdevtools rpmlint desktop-file-utils ShellCheck gh
       - uses: actions/checkout@v4
       - name: Tag must match VERSION in the script
         run: |

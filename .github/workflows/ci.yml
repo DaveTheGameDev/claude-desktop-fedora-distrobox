@@ -11,7 +11,7 @@ jobs:
     container: fedora:latest
     steps:
       - name: Install tools
-        run: dnf install -y --setopt=install_weak_deps=False git rpm-build rpmdevtools rpmlint desktop-file-utils ShellCheck
+        run: dnf install -y --setopt=install_weak_deps=False --disablerepo='*openh264*' git rpm-build rpmdevtools rpmlint desktop-file-utils ShellCheck
       - uses: actions/checkout@v4
       - name: shellcheck
         run: shellcheck -S warning install-claude-desktop-distrobox.sh packaging/build-rpm.sh
