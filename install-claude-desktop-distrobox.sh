@@ -49,6 +49,11 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 # Config / defaults
 # ---------------------------------------------------------------------------
+VERSION="1.0.0"                # keep in sync with the git tag vX.Y.Z (CI enforces)
+REPO_SLUG="DaveTheGameDev/claude-desktop-fedora-distrobox"
+RELEASES_URL="https://github.com/$REPO_SLUG/releases/latest"
+RELEASES_API="https://api.github.com/repos/$REPO_SLUG/releases/latest"
+
 NAME="claude-desktop"          # distrobox container name
 IMAGE="ubuntu:24.04"           # base image (Ubuntu 22.04+ / Debian 12+ required)
 ACTION="install"               # install | update | remove | print-inner
@@ -59,12 +64,17 @@ ISOLATE_HOME=1                 # 1 => dedicated container home (privacy)
 ISOLATE_NET=1                  # 1 => own network namespace (privacy)
 FULL_UPGRADE=0                 # update: also apt-upgrade the container's base OS
 PURGE=0                        # remove: also delete the dedicated home dir
+GUI=0                          # 1 => zenity dialogs instead of terminal prompts
+NOTIFY=0                       # 1 => desktop notification when an update finishes
+ACTION_SET=0                   # whether an explicit action flag was given
 BOX_HOME="$HOME/.local/share/claude-desktop-box"   # dedicated container home
 REAL_HOME="$HOME"              # the real host home (never mounted when isolating)
 declare -a SHARES=()           # extra host dirs to expose (repeatable --share)
 
 # Anthropic's signing-key fingerprint, from the official docs
-# (https://code.claude.com/docs/en/desktop-linux).
+# (https://code.claude.com/docs/en/desktop-linux). The in-container script
+# carries its own copy (heredoc); this one is the documented reference value.
+# shellcheck disable=SC2034
 EXPECTED_FPR="31DDDE24DDFAB679F42D7BD2BAA929FF1A7ECACE"
 
 # Host-side launcher artifacts (created by us; not distrobox-export).
@@ -82,7 +92,54 @@ else
 fi
 log()  { printf '%s==>%s %s\n'      "$C_BLUE" "$C_OFF" "$*"; }
 warn() { printf '%swarning:%s %s\n' "$C_YEL"  "$C_OFF" "$*" >&2; }
-die()  { printf '%serror:%s %s\n'   "$C_RED"  "$C_OFF" "$*" >&2; exit 1; }
+die()  {
+  printf '%serror:%s %s\n' "$C_RED" "$C_OFF" "$*" >&2
+  have_gui && zenity --error --width=420 --title="Claude Desktop Setup" --text="$*" 2>/dev/null
+  exit 1
+}
+
+# ---------------------------------------------------------------------------
+# GUI helpers (zenity). Everything here is a no-op / plain print without --gui,
+# so the CLI behaviour is unchanged.
+# ---------------------------------------------------------------------------
+GUI_TITLE="Claude Desktop Setup"
+have_gui() { [[ $GUI -eq 1 ]] && command -v zenity >/dev/null 2>&1; }
+gui_info()     { zenity --info     --width=460 --title="$GUI_TITLE" --text="$1" 2>/dev/null || true; }
+gui_warn()     { zenity --warning  --width=460 --title="$GUI_TITLE" --text="$1" 2>/dev/null || true; }
+gui_question() { zenity --question --width=460 --title="$GUI_TITLE" --text="$1" 2>/dev/null; }
+
+# Desktop notification (libnotify). Silent no-op when notify-send is missing or
+# no session bus is reachable — the journal still has the full log.
+notify_user() {
+  [[ $NOTIFY -eq 1 ]] || return 0
+  command -v notify-send >/dev/null 2>&1 || return 0
+  notify-send -a "Claude Desktop" -i claude-desktop "$1" "${2:-}" 2>/dev/null || true
+}
+
+# Run this very script with the given arguments behind a pulsating progress
+# dialog. Output is captured to a log; on failure the log is shown. Returns the
+# child's exit status. Used only by the GUI menu.
+SELF="$(readlink -f "$0")"
+run_with_progress() {
+  local title="$1"; shift
+  local logf rc
+  logf="$(mktemp)"
+  # `--gui` is passed so nested prompts (e.g. the restart question) use dialogs.
+  # Read PIPESTATUS straight after the pipeline — an appended `|| true` would
+  # overwrite it with its own status.
+  set +e
+  "$SELF" "$@" --gui --name "$NAME" 2>&1 | tee "$logf" \
+    | zenity --progress --pulsate --auto-close --no-cancel --width=460 \
+             --title="$GUI_TITLE" --text="$title" 2>/dev/null
+  rc="${PIPESTATUS[0]}"
+  set -e
+  if [[ $rc -ne 0 ]]; then
+    zenity --text-info --width=720 --height=480 --title="$GUI_TITLE — failed" \
+           --filename="$logf" 2>/dev/null || true
+  fi
+  rm -f "$logf"
+  return "$rc"
+}
 
 usage() {
   cat <<'EOF'
@@ -92,7 +149,8 @@ Usage:
   install-claude-desktop-distrobox.sh [action] [options]
 
 Actions:
-  (default)        Create the container and install Claude + host launcher.
+  --install        Create the container and install Claude + host launcher
+  (default)        (this is what happens with no action flag).
   --update         Update Claude inside the existing container.
                    Add --full to also apt-upgrade the container's base OS.
   --remove         Remove the container, the host launcher, and the timer.
@@ -104,6 +162,17 @@ Actions:
   --install-timer  Enable a weekly systemd *user* timer that auto-updates
                    Claude + the container's base OS (runs --update --full).
   --remove-timer   Disable and remove that timer.
+  --check-self-update
+                   Ask GitHub whether a newer release of this setup tool
+                   exists (only ever runs when you invoke it).
+  --version        Print the setup tool version and exit.
+
+GUI options:
+  --gui            Use desktop dialogs (zenity) instead of terminal prompts.
+                   Alone, opens the "Claude Desktop Setup" menu; combined with
+                   an action (e.g. --update --gui) runs that action with dialogs.
+  --notify         Send a desktop notification when an update finishes
+                   (used by the auto-update timer).
 
 Privacy options (defaults are the hardened choices):
   --isolate-home   Give the container a dedicated home dir (default).
@@ -187,6 +256,8 @@ ver_before="$(dpkg-query -W -f='${Version}' claude-desktop 2>/dev/null || echo n
 $APT update -y
 $APT install -y --only-upgrade claude-desktop
 ver_after="$(dpkg-query -W -f='${Version}' claude-desktop 2>/dev/null || echo none)"
+echo "META:VER_BEFORE=$ver_before"
+echo "META:VER_AFTER=$ver_after"
 if [ "$ver_before" = "$ver_after" ]; then
   echo "==> [container] claude-desktop is already the newest version ($ver_after)."
   echo "META:UPDATED=0"
@@ -263,7 +334,7 @@ Documentation=file://$self
 
 [Service]
 Type=oneshot
-ExecStart=/bin/bash $self --update --full --name $NAME
+ExecStart=/bin/bash $self --update --full --notify --name $NAME
 TimeoutStartSec=1800
 EOF
   cat > "$unitdir/${TIMER_NAME}.timer" <<EOF
@@ -298,12 +369,17 @@ remove_timer() {
 # ---------------------------------------------------------------------------
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --update)         ACTION="update"; shift ;;
-    --refresh-launcher) ACTION="refresh-launcher"; shift ;;
-    --remove)         ACTION="remove"; shift ;;
-    --install-timer)  ACTION="install-timer"; shift ;;
-    --remove-timer)   ACTION="remove-timer"; shift ;;
-    --print-inner)    ACTION="print-inner"; shift ;;
+    --install)        ACTION="install"; ACTION_SET=1; shift ;;
+    --update)         ACTION="update"; ACTION_SET=1; shift ;;
+    --refresh-launcher) ACTION="refresh-launcher"; ACTION_SET=1; shift ;;
+    --remove)         ACTION="remove"; ACTION_SET=1; shift ;;
+    --install-timer)  ACTION="install-timer"; ACTION_SET=1; shift ;;
+    --remove-timer)   ACTION="remove-timer"; ACTION_SET=1; shift ;;
+    --print-inner)    ACTION="print-inner"; ACTION_SET=1; shift ;;
+    --check-self-update) ACTION="self-check"; ACTION_SET=1; shift ;;
+    --version)      printf '%s\n' "$VERSION"; exit 0 ;;
+    --gui)          GUI=1; shift ;;
+    --notify)       NOTIFY=1; shift ;;
     --sandbox)      SANDBOX=1; shift ;;
     --isolate-home) ISOLATE_HOME=1; shift ;;
     --full-home)    ISOLATE_HOME=0; shift ;;
@@ -325,9 +401,44 @@ if [[ "$ACTION" == "print-inner" ]]; then
   exit 0
 fi
 
+# `--gui` with no explicit action opens the menu.
+if [[ $GUI -eq 1 && $ACTION_SET -eq 0 ]]; then ACTION="gui-menu"; fi
+if [[ $GUI -eq 1 ]] && ! command -v zenity >/dev/null 2>&1; then
+  warn "--gui requested but zenity is not installed (dnf install zenity); using terminal output."
+  GUI=0
+  [[ "$ACTION" == "gui-menu" ]] && die "The setup menu needs zenity. Install it or use the command-line flags (--help)."
+fi
+
 # Timer management is host-side (systemd) only — no container needed.
 if [[ "$ACTION" == "install-timer" ]]; then install_timer; exit 0; fi
 if [[ "$ACTION" == "remove-timer" ]]; then remove_timer; exit 0; fi
+
+# ---------------------------------------------------------------------------
+# Self-update check: one request to the GitHub Releases API, only when the
+# user asks for it (menu row or --check-self-update). Never runs from the timer.
+# ---------------------------------------------------------------------------
+self_check() {
+  local json tag latest
+  log "Checking $REPO_SLUG for a newer release (you have $VERSION) ..."
+  if ! json="$(curl -fsSL --max-time 10 -H 'Accept: application/vnd.github+json' "$RELEASES_API" 2>/dev/null)"; then
+    warn "Could not reach GitHub (offline, or no release published yet)."
+    have_gui && gui_warn "Could not check for updates.\n\nEither you are offline or no release has been published yet.\n\nYou have version $VERSION."
+    return 0
+  fi
+  tag="$(printf '%s' "$json" | sed -n 's/.*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
+  latest="${tag#v}"
+  [[ -n "$latest" ]] || { warn "Unexpected response from GitHub."; return 0; }
+  if [[ "$latest" != "$VERSION" && "$(printf '%s\n%s\n' "$VERSION" "$latest" | sort -V | tail -n1)" == "$latest" ]]; then
+    log "A newer version is available: $latest (you have $VERSION): $RELEASES_URL"
+    if have_gui && gui_question "Version <b>$latest</b> of Claude Desktop Setup is available (you have $VERSION).\n\nOpen the download page?"; then
+      xdg-open "$RELEASES_URL" >/dev/null 2>&1 &
+    fi
+  else
+    log "You have the latest version ($VERSION)."
+    have_gui && gui_info "Claude Desktop Setup is up to date (version $VERSION)."
+  fi
+}
+if [[ "$ACTION" == "self-check" ]]; then self_check; exit 0; fi
 
 # ---------------------------------------------------------------------------
 # Sanity checks
@@ -350,8 +461,14 @@ ensure_tool() {
   local tool="$1" pkg="$2"
   command -v "$tool" >/dev/null 2>&1 && return 0
   [[ $HAVE_DNF -eq 1 ]] || die "'$tool' is missing and dnf isn't available. Please install '$pkg' manually."
-  log "Installing $pkg (needs sudo) ..."
-  sudo dnf install -y "$pkg"
+  if have_gui && command -v pkexec >/dev/null 2>&1; then
+    # No terminal for a sudo password in GUI mode — use polkit's dialog instead.
+    log "Installing $pkg (polkit will ask for your password) ..."
+    pkexec dnf install -y "$pkg"
+  else
+    log "Installing $pkg (needs sudo) ..."
+    sudo dnf install -y "$pkg"
+  fi
 }
 
 ensure_tool distrobox distrobox
@@ -623,6 +740,20 @@ build_host_launcher() {
     } > "$HOST_DESKTOP"
   fi
   rm -f "$tmp"
+
+  # 3b) A right-click "Check for updates" action on the launcher, pointing back
+  #     at this very script (RPM: /usr/bin/claude-desktop-setup; git clone: its
+  #     path). Runs the update with dialogs, so no terminal is ever needed.
+  local update_exec
+  update_exec="$(printf '%q --update --full --gui --name %q' "$SELF" "$NAME")"
+  sed -i -e '/^\[Desktop Action Update\]/,/^$/d' "$HOST_DESKTOP"   # drop a stale copy
+  if grep -q '^Actions=' "$HOST_DESKTOP"; then
+    grep -q '^Actions=.*\bUpdate;' "$HOST_DESKTOP" || sed -i -e 's|^Actions=\(.*\)$|Actions=\1Update;|' "$HOST_DESKTOP"
+  else
+    sed -i -e "0,/^\[Desktop Entry\]/s|^\[Desktop Entry\]|[Desktop Entry]\nActions=Update;|" "$HOST_DESKTOP"
+  fi
+  printf '\n[Desktop Action Update]\nName=Check for updates\nExec=%s\n' "$update_exec" >> "$HOST_DESKTOP"
+
   chmod +x "$HOST_DESKTOP" 2>/dev/null || true
   command -v update-desktop-database >/dev/null 2>&1 && \
     update-desktop-database "$(dirname "$HOST_DESKTOP")" 2>/dev/null || true
@@ -744,6 +875,17 @@ case "$ACTION" in
       log "re-creating with more --share flags, or bind-mount into the container."
     fi
     log "Update later: $0 --update   |   Remove: $0 --remove"
+    if have_gui; then
+      msg="<b>Claude Desktop is installed.</b>\n\nSearch for <b>Claude</b> in your app menu to launch it, then sign in.\n\n"
+      if [[ $ISOLATE_HOME -eq 1 ]]; then
+        msg+="• The app only sees its own folder ($BOX_HOME)"
+        [[ ${#SHARES[@]} -gt 0 ]] && msg+=" plus the folders you shared"
+        msg+=" — your real home stays hidden.\n"
+      fi
+      [[ $ISOLATE_NET -eq 1 ]] && msg+="• It runs in its own network namespace (internet yes, your host's localhost no).\n"
+      msg+="\nTo update later: right-click the Claude icon → <b>Check for updates</b>, or open <b>Claude Desktop Setup</b>."
+      gui_info "$msg"
+    fi
     ;;
 
   update)
@@ -757,8 +899,14 @@ case "$ACTION" in
     # socket, which cannot be reopened by path — tee dies at startup and the
     # in-container apt run is then killed by SIGPIPE mid-install.
     UPDATE_LOG="$(mktemp)"
-    distrobox enter --name "$NAME" -- env FULL_UPGRADE="$FULL_UPGRADE" bash -c "$(emit_update_inner)" | tee "$UPDATE_LOG"
+    if ! distrobox enter --name "$NAME" -- env FULL_UPGRADE="$FULL_UPGRADE" bash -c "$(emit_update_inner)" | tee "$UPDATE_LOG"; then
+      rm -f "$UPDATE_LOG"
+      notify_user "Claude Desktop update failed" "See: journalctl --user -u ${TIMER_NAME}"
+      die "The in-container update failed (see output above)."
+    fi
     UPDATED="$(sed -n 's/^META:UPDATED=//p' "$UPDATE_LOG" | head -n1)"
+    VER_BEFORE="$(sed -n 's/^META:VER_BEFORE=//p' "$UPDATE_LOG" | head -n1)"
+    VER_AFTER="$(sed -n 's/^META:VER_AFTER=//p' "$UPDATE_LOG" | head -n1)"
     rm -f "$UPDATE_LOG"
 
     # Rebuild the host launcher while the container is still up, so a new
@@ -776,22 +924,48 @@ case "$ACTION" in
     # The upgrade only replaces files on disk. If the app is still running it is
     # the OLD build (Electron stays resident and `distrobox enter` would just
     # refocus it), so it must be restarted for the update to take effect.
+    RESTART_PENDING=0
     if [[ "$UPDATED" == "1" ]] && "$MGR" exec "$NAME" pgrep -f claude-desktop >/dev/null 2>&1; then
-      if [[ -t 0 ]]; then
-        read -r -p "Claude Desktop is still running the old version. Restart it now? [Y/n] " reply || reply=""
-        if [[ ! "$reply" =~ ^[Nn] ]]; then
-          log "Stopping container '$NAME' (and the old app) ..."
-          distrobox stop --yes "$NAME"
-          log "Stopped. Relaunch Claude from your app menu or with: claude-desktop"
+      reply=""
+      if have_gui; then
+        if gui_question "Claude was updated to <b>$VER_AFTER</b>, but the running window is still the old version.\n\nRestart Claude now? (Your data and login are kept — just relaunch it afterwards.)"; then
+          reply="y"
         else
-          warn "Claude keeps running the OLD version until restarted (podman stop $NAME, then relaunch)."
+          reply="n"
         fi
+      elif [[ -t 0 ]]; then
+        read -r -p "Claude Desktop is still running the old version. Restart it now? [Y/n] " reply || reply=""
       else
+        reply="n"; RESTART_PENDING=1
         warn "Update installed but Claude is running the OLD version — restart it to apply:"
         warn "  podman stop $NAME   (then relaunch Claude)"
       fi
+      if [[ ! "$reply" =~ ^[Nn] ]]; then
+        log "Stopping container '$NAME' (and the old app) ..."
+        distrobox stop --yes "$NAME"
+        log "Stopped. Relaunch Claude from your app menu or with: claude-desktop"
+        if have_gui && gui_question "Claude has been stopped. Launch the new version now?"; then
+          gtk-launch "$(basename "$HOST_DESKTOP")" >/dev/null 2>&1 \
+            || nohup "$HOST_BIN" >/dev/null 2>&1 &
+        fi
+      elif [[ $RESTART_PENDING -eq 0 ]]; then
+        RESTART_PENDING=1
+        warn "Claude keeps running the OLD version until restarted (podman stop $NAME, then relaunch)."
+      fi
     fi
     log "Update complete."
+
+    if [[ "$UPDATED" == "1" ]]; then
+      if [[ $RESTART_PENDING -eq 1 ]]; then
+        notify_user "Claude Desktop updated: $VER_BEFORE → $VER_AFTER" "Restart Claude to start using the new version."
+      else
+        notify_user "Claude Desktop updated: $VER_BEFORE → $VER_AFTER" "The new version is ready."
+      fi
+      have_gui && [[ $RESTART_PENDING -eq 0 ]] && gui_info "Claude Desktop was updated: $VER_BEFORE → $VER_AFTER"
+    else
+      notify_user "Claude Desktop is up to date" "Version $VER_AFTER"
+      have_gui && gui_info "Claude Desktop is already the newest version ($VER_AFTER)."
+    fi
     ;;
 
   refresh-launcher)
@@ -822,7 +996,85 @@ case "$ACTION" in
     log "Host launcher removed."
     ;;
 
+  gui-menu)
+    # The "Claude Desktop Setup" app. Every row re-invokes this script with the
+    # matching CLI flags behind a progress dialog, so GUI and CLI share one
+    # code path. Loops until the user cancels.
+    timer_enabled() { systemctl --user is-enabled "${TIMER_NAME}.timer" >/dev/null 2>&1; }
+    while :; do
+      declare -a rows=()
+      if container_exists "$NAME"; then
+        status="Claude Desktop is <b>installed</b> (container '$NAME')."
+        if timer_enabled; then
+          status+="\nWeekly auto-update: <b>on</b>."
+        else
+          status+="\nWeekly auto-update: <b>off</b>."
+        fi
+        rows+=(TRUE  update   "Update Claude now (app + container security patches)")
+        if timer_enabled; then
+          rows+=(FALSE timer-off "Turn OFF weekly auto-update")
+        else
+          rows+=(FALSE timer-on  "Turn ON weekly auto-update (recommended)")
+        fi
+        rows+=(FALSE self     "Check for a newer version of this setup tool")
+        rows+=(FALSE refresh  "Repair the app-menu entry / icon")
+        rows+=(FALSE remove   "Remove Claude Desktop")
+      else
+        status="Claude Desktop is <b>not installed</b> yet."
+        rows+=(TRUE  install       "Install Claude Desktop (recommended: privacy-hardened)")
+        rows+=(FALSE install-share "Install and share one folder with the app (for Cowork / Code)")
+        rows+=(FALSE self          "Check for a newer version of this setup tool")
+      fi
+      choice="$(zenity --list --radiolist --width=560 --height=360 --title="$GUI_TITLE" \
+                  --text="$status\n\nWhat would you like to do?" \
+                  --column="" --column="id" --column="Action" --hide-column=2 --print-column=2 \
+                  "${rows[@]}" 2>/dev/null)" || exit 0
+      case "$choice" in
+        install)
+          gui_question "This will:\n\n• install <b>distrobox</b>/<b>podman</b> if missing (asks for your password)\n• create an Ubuntu container and install Anthropic's <b>official, signed</b> Claude app in it\n• add <b>Claude</b> to your app menu\n\nThe app gets its own private folder and network namespace; your real home stays hidden. First run downloads a few hundred MB.\n\nContinue?" || continue
+          run_with_progress "Installing Claude Desktop… (a few minutes on first run)" --install || continue
+          ;;
+        install-share)
+          dir="$(zenity --file-selection --directory --title="Choose a folder to share with Claude" 2>/dev/null)" || continue
+          gui_question "Install Claude Desktop and let it access:\n\n<b>$dir</b>\n\nEverything else in your home stays hidden. Continue?" || continue
+          run_with_progress "Installing Claude Desktop… (a few minutes on first run)" --install --share "$dir" || continue
+          ;;
+        update)
+          run_with_progress "Updating Claude Desktop…" --update --full || continue
+          ;;
+        timer-on)
+          run_with_progress "Enabling weekly auto-update…" --install-timer && \
+            gui_info "Weekly auto-update is <b>on</b>.\n\nClaude and the container's security patches are refreshed every week; you get a desktop notification when a new version lands."
+          ;;
+        timer-off)
+          run_with_progress "Disabling weekly auto-update…" --remove-timer && \
+            gui_info "Weekly auto-update is <b>off</b>."
+          ;;
+        self)
+          "$SELF" --check-self-update --gui || true
+          ;;
+        refresh)
+          run_with_progress "Rebuilding the app-menu entry…" --refresh-launcher && \
+            gui_info "Done. Log out and back in if the dock still shows the old icon."
+          ;;
+        remove)
+          gui_question "Remove Claude Desktop?\n\nThis deletes the container, the app-menu entry and the auto-update timer.\nYour login and chat data (in $BOX_HOME) are <b>kept</b> unless you choose to delete them next." || continue
+          purge=()
+          if zenity --question --width=460 --title="$GUI_TITLE" --icon=dialog-warning \
+               --text="Also delete your Claude login and local data?\n\n<b>$BOX_HOME</b>\n\nThis cannot be undone." \
+               --ok-label="Delete data too" --cancel-label="Keep data" 2>/dev/null; then
+            purge=(--purge)
+          fi
+          run_with_progress "Removing Claude Desktop…" --remove "${purge[@]}" && \
+            gui_info "Claude Desktop has been removed."
+          ;;
+      esac
+    done
+    ;;
+
   *)
     die "internal error: unknown action '$ACTION'"
     ;;
 esac
+
+exit 0

@@ -20,13 +20,15 @@ sign-in, the works — while keeping it out of your real home directory and off 
 - [Why](#why)
 - [How it works](#how-it-works)
 - [Security &amp; trust model](#security--trust-model)
+- [Easy install (Fedora, GUI)](#easy-install-fedora-gui)
 - [Requirements](#requirements)
-- [Install](#install)
+- [Install from source (advanced)](#install-from-source-advanced)
 - [Use it](#use-it)
 - [Update it](#update-it)
 - [Remove it](#remove-it)
 - [Command reference](#command-reference)
 - [Under the hood: the auto-update timer](#under-the-hood-the-auto-update-timer)
+- [Releasing (maintainers)](#releasing-maintainers)
 - [Troubleshooting](#troubleshooting)
 - [Limitations &amp; honest caveats](#limitations--honest-caveats)
 
@@ -102,6 +104,38 @@ The isolation here is about *"don't casually hand my whole home to a networked a
 > that typically fail inside a rootless container. The container is the outer boundary. Pass
 > `--sandbox` to try keeping Chromium's sandbox (may fail to launch).
 
+## Easy install (Fedora, GUI)
+
+No terminal needed.
+
+1. Download the latest **`claude-desktop-distrobox-*.noarch.rpm`** from the
+   [Releases page](https://github.com/DaveTheGameDev/claude-desktop-fedora-distrobox/releases/latest).
+2. **Double-click** it — GNOME Software opens; click **Install**. This pulls in `distrobox`,
+   `podman` and `zenity` if you don't have them. (Or: `sudo dnf install ./claude-desktop-distrobox-*.rpm`.)
+3. Open **Claude Desktop Setup** from your app menu and choose **Install Claude Desktop**.
+   Want to let Claude (Cowork / Code) work on one of your folders? Pick *Install and share one
+   folder* instead. The first run downloads a few hundred MB and takes a few minutes.
+4. Launch **Claude** from the app menu and sign in.
+
+**Updating, in the GUI:**
+
+- Right-click the **Claude** icon (dock or app grid) → **Check for updates**. It updates the app and
+  the container's security patches, and if Claude is running the old version it offers to restart it.
+- Or open **Claude Desktop Setup** → **Update Claude now**.
+- Turn on **weekly auto-update** in Claude Desktop Setup: a systemd *user* timer runs the update
+  every week and shows a desktop notification when a new version landed ("restart Claude to apply").
+- **Check for a newer version of this setup tool** (also in Claude Desktop Setup) asks GitHub once
+  and offers to open the download page. That is the *only* time this tool ever contacts GitHub — it
+  never checks in the background.
+
+**Removing:** Claude Desktop Setup → **Remove Claude Desktop**. Your login/chat data are kept unless
+you tick *Delete data too*. Then `sudo dnf remove claude-desktop-distrobox` if you also want the
+setup tool gone.
+
+> The RPM installs just two files (`/usr/bin/claude-desktop-setup` and the app-menu entry).
+> The container and the Claude app live in *your* home directory, rootless — nothing runs as root
+> at runtime, and the [trust model](#security--trust-model) is unchanged.
+
 ## Requirements
 
 - **Fedora / RHEL-family** (or any Linux with the tools below). On Fedora the script auto-installs
@@ -118,7 +152,9 @@ command -v podman distrobox   # both should print a path
 grep "^$USER:" /etc/subuid     # rootless mapping should exist
 ```
 
-## Install
+## Install from source (advanced)
+
+The RPM above is just this script plus a `.desktop` file. From a clone:
 
 ```bash
 git clone https://github.com/DaveTheGameDev/claude-desktop-fedora-distrobox.git
@@ -127,7 +163,13 @@ chmod +x install-claude-desktop-distrobox.sh
 
 # Default = privacy-hardened: sandbox home + isolated network.
 ./install-claude-desktop-distrobox.sh
+
+# …or the same thing with dialogs instead of terminal output:
+./install-claude-desktop-distrobox.sh --gui
 ```
+
+Build the RPM yourself with `packaging/build-rpm.sh` (needs `rpm-build`, `rpmdevtools`,
+`desktop-file-utils`); it lands in `dist/`.
 
 First run pulls the Ubuntu image and downloads the app, so give it a few minutes. If `distrobox`
 or `podman` are missing, the script offers to install them with `sudo dnf` (the only step that
@@ -166,7 +208,11 @@ and launching again would just refocus the old window. If the app is running whe
 version lands, `--update` offers to restart it for you (stopping the container; your
 data/login are untouched — just relaunch afterwards).
 
-**Automatically (recommended)** — a weekly systemd *user* timer that runs `--update --full`:
+In the GUI: right-click the Claude icon → **Check for updates**, or use **Claude Desktop Setup**.
+The same flow, with progress and result dialogs (`--update --full --gui`).
+
+**Automatically (recommended)** — a weekly systemd *user* timer that runs `--update --full --notify`
+and sends a desktop notification when something changed:
 
 ```bash
 ./install-claude-desktop-distrobox.sh --install-timer     # enable
@@ -202,6 +248,10 @@ Add `--purge` only if you also want the sandbox home gone.
 | `--remove --purge` | …and delete the sandbox home (login/data). |
 | `--install-timer` | Enable the weekly auto-update systemd user timer. |
 | `--remove-timer` | Disable and remove that timer. |
+| `--gui` | Use zenity dialogs instead of terminal prompts. Alone it opens the **Claude Desktop Setup** menu; with an action (`--update --gui`) it runs that action with dialogs. |
+| `--notify` | Desktop notification when an update finishes (the timer uses this). |
+| `--check-self-update` | Ask GitHub Releases once whether a newer setup tool exists; offer to open the download page. |
+| `--version` | Print the setup tool version. |
 | `--share <dir>` | Expose a host directory to the app (repeatable). |
 | `--full-home` | **Opt out** of home isolation (mount your real `$HOME`). |
 | `--share-net` | **Opt out** of network isolation (share the host network). |
@@ -224,7 +274,7 @@ Description=Update Claude Desktop (distrobox) + container base OS security patch
 
 [Service]
 Type=oneshot
-ExecStart=/bin/bash /path/to/install-claude-desktop-distrobox.sh --update --full --name claude-desktop
+ExecStart=/bin/bash /path/to/install-claude-desktop-distrobox.sh --update --full --notify --name claude-desktop
 TimeoutStartSec=1800
 ```
 
@@ -242,7 +292,18 @@ Persistent=true      # runs once after next login if the machine was off at the 
 WantedBy=timers.target
 ```
 
-It's a **user** timer (no root), and every run is logged to the journal for auditability.
+It's a **user** timer (no root), and every run is logged to the journal for auditability. With the
+RPM the path is `/usr/bin/claude-desktop-setup`. `--notify` sends a desktop notification through
+your session bus (`notify-send`); if none is reachable the run is still fully logged in the journal.
+
+## Releasing (maintainers)
+
+1. Bump `VERSION="X.Y.Z"` at the top of `install-claude-desktop-distrobox.sh` and add a section
+   `## X.Y.Z — YYYY-MM-DD` to `CHANGELOG.md`.
+2. Commit, then `git tag vX.Y.Z && git push --tags`.
+3. The `Release` workflow builds the noarch RPM in a Fedora container, refuses to run if the tag and
+   `VERSION` disagree, and publishes a GitHub Release with the `.rpm` and a `SHA256SUMS` file, using
+   the changelog section as release notes. `CI` runs shellcheck + a dry RPM build on every push.
 
 ## Troubleshooting
 

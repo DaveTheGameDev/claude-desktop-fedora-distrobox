@@ -1,0 +1,25 @@
+name: CI
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  lint-and-build:
+    name: shellcheck + RPM dry build
+    runs-on: ubuntu-latest
+    container: fedora:latest
+    steps:
+      - name: Install tools
+        run: dnf install -y --setopt=install_weak_deps=False git rpm-build rpmdevtools rpmlint desktop-file-utils ShellCheck
+      - uses: actions/checkout@v4
+      - name: shellcheck
+        run: shellcheck -S warning install-claude-desktop-distrobox.sh packaging/build-rpm.sh
+      - name: Validate desktop file
+        run: desktop-file-validate packaging/claude-desktop-setup.desktop
+      - name: Dry RPM build (uses the script's own VERSION)
+        run: |
+          v="$(sed -n 's/^VERSION="\([^"]*\)".*/\1/p' install-claude-desktop-distrobox.sh)"
+          packaging/build-rpm.sh "$v"
+      - name: rpmlint (informational)
+        run: rpmlint dist/*.rpm || true

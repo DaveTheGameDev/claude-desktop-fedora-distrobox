@@ -1,0 +1,56 @@
+name: Release
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  rpm:
+    name: Build RPM and publish release
+    runs-on: ubuntu-latest
+    container: fedora:latest
+    steps:
+      - name: Install tools
+        run: dnf install -y --setopt=install_weak_deps=False git rpm-build rpmdevtools rpmlint desktop-file-utils ShellCheck gh
+      - uses: actions/checkout@v4
+      - name: Tag must match VERSION in the script
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          v="$(sed -n 's/^VERSION="\([^"]*\)".*/\1/p' install-claude-desktop-distrobox.sh)"
+          if [ "$tag" != "$v" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match VERSION=\"$v\" in the script"; exit 1
+          fi
+      - name: shellcheck
+        run: shellcheck -S warning install-claude-desktop-distrobox.sh packaging/build-rpm.sh
+      - name: Build RPM
+        run: packaging/build-rpm.sh "${GITHUB_REF_NAME#v}"
+      - name: rpmlint (informational)
+        run: rpmlint dist/*.rpm || true
+      - name: Checksums
+        run: cd dist && sha256sum *.rpm > SHA256SUMS && cat SHA256SUMS
+      - name: Release notes from CHANGELOG
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          awk -v v="$v" '
+            /^## / { on = ($0 ~ "^## \\[?" v "\\]?") ; if (!on && seen) exit }
+            on { seen = 1; print }
+          ' CHANGELOG.md > dist/notes.md || true
+          if [ ! -s dist/notes.md ]; then echo "Release $GITHUB_REF_NAME" > dist/notes.md; fi
+          cat >> dist/notes.md <<'MD'
+
+          ### Install on Fedora
+          Download the `.rpm` below and double-click it (GNOME Software), or:
+          ```bash
+          sudo dnf install ./claude-desktop-distrobox-*.noarch.rpm
+          ```
+          Then open **Claude Desktop Setup** from your app menu.
+          MD
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" \
+            --notes-file dist/notes.md dist/*.rpm dist/SHA256SUMS
