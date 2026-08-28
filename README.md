@@ -263,8 +263,10 @@ It's a **user** timer (no root), and every run is logged to the journal for audi
   out and back in. That rebuild pins the window class (`--class` + a matching `StartupWMClass`) and
   installs the icons into `~/.local/share/icons/hicolor/` under every name the shell might look up,
   so the window and the launcher share one dock entry — and one icon. If you still see two, run it
-  again *while the app is open*: it then reads the real `WM_CLASS` off the live window (X11/XWayland)
-  and uses that.
+  again *while the app is open*: it then reads the real `WM_CLASS` off the live window and uses that.
+  Note that live read needs `xprop` and an X11/XWayland window. Under a native Wayland session —
+  the default on Fedora GNOME, where `xlsclients` lists nothing for Claude — it is skipped and the
+  class derived from the package is used instead, which is normally the correct one anyway.
 - **Cowork/Code can't see my files** — that's the isolation working. Reinstall with
   `--share <dir>` for the folders you want it to access.
 - **Benign log noise** — `Failed to connect to ... system_bus_socket` and missing

@@ -137,12 +137,14 @@ emit_install_inner() {
   cat <<'INNER'
 #!/usr/bin/env bash
 set -euo pipefail
-export DEBIAN_FRONTEND=noninteractive
+# sudo's env_reset would strip an exported DEBIAN_FRONTEND, so pass it on the
+# command line of every apt call instead.
+APT="sudo DEBIAN_FRONTEND=noninteractive apt-get"
 EXPECTED_FPR="31DDDE24DDFAB679F42D7BD2BAA929FF1A7ECACE"
 
 echo "==> [container] Installing prerequisites..."
-sudo apt-get update -y
-sudo apt-get install -y curl ca-certificates gnupg
+$APT update -y
+$APT install -y curl ca-certificates gnupg
 
 echo "==> [container] Downloading Anthropic's signing key..."
 sudo curl -fsSLo /usr/share/keyrings/claude-desktop-archive-keyring.asc \
@@ -167,8 +169,8 @@ echo "deb [arch=amd64,arm64 signed-by=/usr/share/keyrings/claude-desktop-archive
   | sudo tee /etc/apt/sources.list.d/claude-desktop.list >/dev/null
 
 echo "==> [container] Installing claude-desktop..."
-sudo apt-get update -y
-sudo apt-get install -y claude-desktop
+$APT update -y
+$APT install -y claude-desktop
 echo "==> [container] Install complete."
 INNER
 }
@@ -177,11 +179,13 @@ emit_update_inner() {
   cat <<'INNER'
 #!/usr/bin/env bash
 set -euo pipefail
-export DEBIAN_FRONTEND=noninteractive
+# sudo's env_reset would strip an exported DEBIAN_FRONTEND, so pass it on the
+# command line of every apt call instead.
+APT="sudo DEBIAN_FRONTEND=noninteractive apt-get"
 echo "==> [container] Updating claude-desktop..."
 ver_before="$(dpkg-query -W -f='${Version}' claude-desktop 2>/dev/null || echo none)"
-sudo apt-get update -y
-sudo apt-get install -y --only-upgrade claude-desktop
+$APT update -y
+$APT install -y --only-upgrade claude-desktop
 ver_after="$(dpkg-query -W -f='${Version}' claude-desktop 2>/dev/null || echo none)"
 if [ "$ver_before" = "$ver_after" ]; then
   echo "==> [container] claude-desktop is already the newest version ($ver_after)."
@@ -192,9 +196,9 @@ else
 fi
 if [ "${FULL_UPGRADE:-0}" = "1" ]; then
   echo "==> [container] Applying base OS security patches (apt upgrade)..."
-  sudo apt-get upgrade -y
-  sudo apt-get autoremove -y --purge
-  sudo apt-get clean
+  $APT upgrade -y
+  $APT autoremove -y --purge
+  $APT clean
 fi
 echo "==> [container] Update complete."
 INNER
@@ -447,6 +451,12 @@ install_app_icons() {
   add_icon_name "$wmclass"
   add_icon_name "${wmclass,,}"
 
+  # Remember what the previous install wrote, so files that this version no
+  # longer ships (a changed icon name, size or window class) can be pruned
+  # instead of piling up across updates.
+  local -a old_files=()
+  [[ -f "$ICON_MANIFEST" ]] && mapfile -t old_files < "$ICON_MANIFEST"
+
   : > "$ICON_MANIFEST"
   tmp="$(mktemp)"
 
@@ -484,9 +494,21 @@ install_app_icons() {
   unset -f add_icon_name
 
   if [[ $count -eq 0 ]]; then
-    rm -f "$ICON_MANIFEST"
+    # Nothing new landed — keep the previous manifest so --remove still works.
+    if [[ ${#old_files[@]} -gt 0 ]]; then
+      printf '%s\n' "${old_files[@]}" > "$ICON_MANIFEST"
+    else
+      rm -f "$ICON_MANIFEST"
+    fi
     return 1
   fi
+
+  local old
+  for old in ${old_files[@]+"${old_files[@]}"}; do
+    [[ "$old" == "$HOST_ICON_DIR/hicolor/"* ]] || continue
+    grep -qxF -- "$old" "$ICON_MANIFEST" || rm -f "$old"
+  done
+  find "$HOST_ICON_DIR/hicolor" -type d -empty -delete 2>/dev/null || true
 
   # Refresh the theme cache if this tree has one; GTK falls back to scanning the
   # directories when it does not, so a failure here is not fatal.
@@ -731,8 +753,13 @@ case "$ACTION" in
     else
       log "Updating Claude inside container '$NAME' ..."
     fi
-    UPDATE_OUT="$(distrobox enter --name "$NAME" -- env FULL_UPGRADE="$FULL_UPGRADE" bash -c "$(emit_update_inner)" | tee /dev/stderr)"
-    UPDATED="$(printf '%s\n' "$UPDATE_OUT" | sed -n 's/^META:UPDATED=//p' | head -n1)"
+    # tee to a real file, never /dev/stderr: under systemd fd 2 is a journald
+    # socket, which cannot be reopened by path — tee dies at startup and the
+    # in-container apt run is then killed by SIGPIPE mid-install.
+    UPDATE_LOG="$(mktemp)"
+    distrobox enter --name "$NAME" -- env FULL_UPGRADE="$FULL_UPGRADE" bash -c "$(emit_update_inner)" | tee "$UPDATE_LOG"
+    UPDATED="$(sed -n 's/^META:UPDATED=//p' "$UPDATE_LOG" | head -n1)"
+    rm -f "$UPDATE_LOG"
 
     # Rebuild the host launcher while the container is still up, so a new
     # icon, name or window class from the package lands on the host too.
