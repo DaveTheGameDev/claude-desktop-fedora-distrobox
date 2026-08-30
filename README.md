@@ -92,6 +92,8 @@ The installer (`install-claude-desktop-distrobox.sh`):
   explicitly `--share`. Your `~/.ssh`, `~/.gnupg`, `~/.mozilla`, browser profiles and everything
   else in your home are not presented to it. Pass `--no-user-dirs` to hide the standard folders too.
 - ✅ The container has its **own network namespace** — it can't reach your host's `localhost` services.
+- ⚠️ The app is pointed at the host's **system D-Bus** (read-mostly: logind, NetworkManager, UPower)
+  so it gets real suspend/resume signals instead of guessing. `--no-system-bus` opts out.
 - ✅ Runs **rootless** (no host root; podman user namespaces).
 
 **What it does *not* protect — read this** 🔶
@@ -316,6 +318,11 @@ your session bus (`notify-send`); if none is reachable the run is still fully lo
 - **No window appears** — the app renders under Wayland/XWayland; `wmctrl` won't always list it.
   Confirm it's alive with `podman exec claude-desktop pgrep -fc claude-desktop` (expect several
   processes). If it truly won't show, try `--sandbox` off (default) and check `journalctl --user`.
+- **After suspend a running session shows a stale timer / "Almost done thinking…" for hours** —
+  the app learns about sleep/wake from logind over the *system* D-Bus, which distrobox does not
+  forward, so it only inferred the wake from a late timer. The launcher now passes the host's
+  system bus through (`DBUS_SYSTEM_BUS_ADDRESS` → `/run/host/run/dbus/system_bus_socket`); run
+  `--refresh-launcher` on an existing install and relaunch Claude. `--no-system-bus` disables it.
 - **Laptop woke up on a different network and Claude is offline** — with the isolated network
   namespace, `pasta` copies the host's IP address once, when the container starts, and never
   updates it. The launcher now checks for this on every launch and restarts the container when the

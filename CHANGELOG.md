@@ -20,6 +20,8 @@ First packaged release.
 - **Suspend/resume safe.** After waking on a different network the launcher notices the
   container's stale IP address (pasta copies it once at start) and restarts the container; the
   weekly auto-update timer waits 30 s after a wake-triggered start so it doesn't race the network.
+  The app is also given the host's system D-Bus (`--no-system-bus` to opt out) so Electron gets
+  logind's real suspend/resume events instead of inferring them from a late timer.
 - **Check for updates** action on the Claude launcher (right-click the dock/app icon).
 - **Desktop notification** after the weekly auto-update runs (`--notify`).
 - **Self-update check** against GitHub Releases (`--check-self-update`), only on request.
