@@ -103,6 +103,10 @@ The installer (`install-claude-desktop-distrobox.sh`):
   (from the [official docs](https://code.claude.com/docs/en/desktop-linux)) and **aborts on mismatch**,
   so a tampered mirror or MITM can't swap the key.
 - **distrobox + podman** — mature, widely used, distro-packaged, rootless.
+- **This repo's GitHub Releases** — only if you use the setup tool's *Check for a newer setup tool*.
+  The RPM is fetched over HTTPS from `github.com` and checked against the release's `SHA256SUMS`.
+  That guards against a corrupt download, **not** against a compromised GitHub account — the RPM is
+  not GPG-signed. Nothing is fetched unless you click that button.
 
 **What the hardening protects**
 
@@ -256,6 +260,24 @@ systemctl   --user start claude-desktop-update.service    # run now, on demand
 ```
 
 Updates are quick and non-destructive; your login/data persist.
+
+### Updating the setup tool itself
+
+The setup tool is separate from the app and is versioned with this repo's
+[GitHub Releases](https://github.com/DaveTheGameDev/claude-desktop-fedora-distrobox/releases).
+It **never** checks for its own updates in the background — only when you ask:
+
+- GUI: **Claude Desktop Settings → Advanced… → Check for a newer setup tool**
+- Terminal: `claude-desktop-setup --check-self-update`
+
+If a newer release exists and you installed the **RPM**, it offers to download the release's
+`.rpm` and `SHA256SUMS`, verifies the checksum, and installs it with `dnf` through a polkit
+password prompt — no terminal, no manual download. `claude-desktop-setup --self-update` does the
+same without asking first. A **git checkout** can't safely replace itself, so it only opens the
+release page; `git pull` instead.
+
+Claude Desktop can stay open during this — the RPM contains only the setup tool, its menu entry and
+icon. If the setup window itself was open, close and reopen it to run the new version.
 
 ## Remove it
 
