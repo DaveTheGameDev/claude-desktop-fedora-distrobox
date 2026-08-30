@@ -139,7 +139,7 @@ No terminal needed.
 <p align="center"><img src="docs/setup-menu.png" width="520" alt="Claude Desktop Setup: Update now / Auto-update / Check for tool update / Advanced"></p>
 
 1. Download the latest **`claude-desktop-distrobox-*.noarch.rpm`** from the
-   [Releases page](https://github.com/DaveTheGameDev/claude-desktop-fedora-distrobox/releases/latest).
+   [Releases page](https://github.com/DaveTheGameDev/claude-desktop-fedora/releases/latest).
 2. **Double-click** it — GNOME Software opens; click **Install**. This pulls in `distrobox`,
    `podman` and `zenity` if you don't have them. (Or: `sudo dnf install ./claude-desktop-distrobox-*.rpm`.)
 3. Open **Claude Desktop Setup** from your app menu and click **Install…**.
@@ -194,8 +194,8 @@ grep "^$USER:" /etc/subuid     # rootless mapping should exist
 The RPM above is just this script plus a `.desktop` file. From a clone:
 
 ```bash
-git clone https://github.com/DaveTheGameDev/claude-desktop-fedora-distrobox.git
-cd claude-desktop-fedora-distrobox
+git clone https://github.com/DaveTheGameDev/claude-desktop-fedora.git
+cd claude-desktop-fedora
 chmod +x install-claude-desktop-distrobox.sh
 
 # Default = privacy-hardened: sandbox home + isolated network.
@@ -268,7 +268,7 @@ Updates are quick and non-destructive; your login/data persist.
 ### Updating the setup tool itself
 
 The setup tool is separate from the app and is versioned with this repo's
-[GitHub Releases](https://github.com/DaveTheGameDev/claude-desktop-fedora-distrobox/releases).
+[GitHub Releases](https://github.com/DaveTheGameDev/claude-desktop-fedora/releases).
 By default it **never** checks for its own updates in the background — only when you ask (or on
 the auto-update schedule, if you enable the notify-only **Also check for setup-tool updates**
 switch / `--install-timer --tool-check`):

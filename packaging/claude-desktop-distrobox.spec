@@ -6,7 +6,7 @@ Version:        %{version}
 Release:        1%{?dist}
 Summary:        Official Claude Desktop on Fedora via distrobox, privacy-hardened
 License:        MIT
-URL:            https://github.com/DaveTheGameDev/claude-desktop-fedora-distrobox
+URL:            https://github.com/DaveTheGameDev/claude-desktop-fedora
 BuildArch:      noarch
 
 Source0:        install-claude-desktop-distrobox.sh

@@ -5,7 +5,7 @@
 Please **do not open a public issue** for security problems.
 
 Use GitHub's private reporting instead:
-**[Report a vulnerability](https://github.com/DaveTheGameDev/claude-desktop-fedora-distrobox/security/advisories/new)**.
+**[Report a vulnerability](https://github.com/DaveTheGameDev/claude-desktop-fedora/security/advisories/new)**.
 Only the maintainer sees it. You'll get an acknowledgement within a few days; fixes ship as a
 tagged release with a CHANGELOG entry crediting you, unless you'd rather not be named.
 

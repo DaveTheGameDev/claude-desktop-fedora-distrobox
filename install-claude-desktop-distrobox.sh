@@ -50,7 +50,7 @@ set -euo pipefail
 # Config / defaults
 # ---------------------------------------------------------------------------
 VERSION="1.2.0"                # keep in sync with the git tag vX.Y.Z (CI enforces)
-REPO_SLUG="DaveTheGameDev/claude-desktop-fedora-distrobox"
+REPO_SLUG="DaveTheGameDev/claude-desktop-fedora"
 RELEASES_URL="https://github.com/$REPO_SLUG/releases/latest"
 RELEASES_API="https://api.github.com/repos/$REPO_SLUG/releases/latest"
 
