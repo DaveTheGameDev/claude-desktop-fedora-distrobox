@@ -148,8 +148,9 @@ No terminal needed.
 - Right-click the **Claude** icon (dock or app grid) → **Check for updates**. It updates the app and
   the container's security patches, and if Claude is running the old version it offers to restart it.
 - Or open **Claude Desktop Setup** → **Update Claude now**.
-- Turn on **weekly auto-update** in Claude Desktop Setup: a systemd *user* timer runs the update
-  every week and shows a desktop notification when a new version landed ("restart Claude to apply").
+- Turn on **auto-update** in Claude Desktop Setup: a systemd *user* timer runs the update
+  (weekly by default — switch to **daily** or **monthly** from the same menu) and shows a desktop
+  notification when a new version landed ("restart Claude to apply").
 - **Check for a newer version of this setup tool** (also in Claude Desktop Setup) asks GitHub once
   and offers to open the download page. That is the *only* time this tool ever contacts GitHub — it
   never checks in the background.
@@ -237,12 +238,13 @@ data/login are untouched — just relaunch afterwards).
 In the GUI: right-click the Claude icon → **Check for updates**, or use **Claude Desktop Setup**.
 The same flow, with progress and result dialogs (`--update --full --gui`).
 
-**Automatically (recommended)** — a weekly systemd *user* timer that runs `--update --full --notify`
+**Automatically (recommended)** — a systemd *user* timer that runs `--update --full --notify`
 and sends a desktop notification when something changed:
 
 ```bash
-./install-claude-desktop-distrobox.sh --install-timer     # enable
-./install-claude-desktop-distrobox.sh --remove-timer      # disable
+./install-claude-desktop-distrobox.sh --install-timer                  # enable (weekly)
+./install-claude-desktop-distrobox.sh --install-timer --every daily    # or daily / monthly; re-run to change
+./install-claude-desktop-distrobox.sh --remove-timer                   # disable
 
 # inspect it
 systemctl --user list-timers claude-desktop-update.timer  # next run
@@ -272,7 +274,8 @@ Add `--purge` only if you also want the sandbox home gone.
 | `--refresh-launcher` | Rebuild just the host launcher, `.desktop` entry and icons from the app already in the container (fixes a dock entry with a missing icon). |
 | `--remove` | Remove container, host launcher, and timer. |
 | `--remove --purge` | …and delete the sandbox home (login/data). |
-| `--install-timer` | Enable the weekly auto-update systemd user timer. |
+| `--install-timer` | Enable the auto-update systemd user timer (weekly by default). |
+| `--every daily\|weekly\|monthly` | With `--install-timer`: how often it runs. Re-run to change. |
 | `--remove-timer` | Disable and remove that timer. |
 | `--gui` | Use zenity dialogs instead of terminal prompts. Alone it opens the **Claude Desktop Setup** menu; with an action (`--update --gui`) it runs that action with dialogs. |
 | `--notify` | Desktop notification when an update finishes (the timer uses this). |
@@ -309,10 +312,10 @@ TimeoutStartSec=1800
 **`claude-desktop-update.timer`**
 ```ini
 [Unit]
-Description=Weekly Claude Desktop update (distrobox) + base OS patches
+Description=Claude Desktop update (distrobox) + base OS patches, weekly
 
 [Timer]
-OnCalendar=weekly
+OnCalendar=weekly          # or daily / monthly (--every)
 RandomizedDelaySec=1h
 Persistent=true      # runs once after next login if the machine was off at the scheduled time
 

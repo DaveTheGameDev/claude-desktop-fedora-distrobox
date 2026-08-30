@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- **Auto-update frequency is configurable**: `--install-timer --every daily|weekly|monthly`
+  (weekly stays the default), and a *Change auto-update frequency* entry in Claude Desktop Setup.
+- README: "How is this different?" comparison, setup-menu screenshot; added `CONTRIBUTING.md`
+  and `SECURITY.md`.
+
 ## 1.0.0 — 2026-08-30
 
 First packaged release.

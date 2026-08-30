@@ -66,6 +66,7 @@ FULL_UPGRADE=0                 # update: also apt-upgrade the container's base O
 PURGE=0                        # remove: also delete the dedicated home dir
 GUI=0                          # 1 => zenity dialogs instead of terminal prompts
 NOTIFY=0                       # 1 => desktop notification when an update finishes
+TIMER_EVERY="weekly"           # install-timer: daily | weekly | monthly
 ACTION_SET=0                   # whether an explicit action flag was given
 BOX_HOME="$HOME/.local/share/claude-desktop-box"   # dedicated container home
 REAL_HOME="$HOME"              # the real host home (never mounted when isolating)
@@ -177,8 +178,10 @@ Actions:
                    from the app already installed in the container. Use this
                    if the dock shows a second, icon-less entry for the running
                    window instead of reusing the launcher's icon.
-  --install-timer  Enable a weekly systemd *user* timer that auto-updates
-                   Claude + the container's base OS (runs --update --full).
+  --install-timer  Enable a systemd *user* timer that auto-updates Claude +
+                   the container's base OS (runs --update --full). Weekly by
+                   default; add --every daily|weekly|monthly to choose. Run it
+                   again with a different --every to change the frequency.
   --remove-timer   Disable and remove that timer.
   --check-self-update
                    Ask GitHub whether a newer release of this setup tool
@@ -351,8 +354,13 @@ INNER
 # absolute path, so they keep working wherever the repo lives.
 # ---------------------------------------------------------------------------
 TIMER_NAME="claude-desktop-update"
+timer_frequency() {
+  # Print daily|weekly|monthly from the installed timer unit (empty if none).
+  sed -n 's/^OnCalendar=//p' "$HOME/.config/systemd/user/${TIMER_NAME}.timer" 2>/dev/null
+}
 install_timer() {
   command -v systemctl >/dev/null 2>&1 || die "systemctl not found — this needs a systemd user session."
+  case "$TIMER_EVERY" in daily|weekly|monthly) ;; *) die "--every must be daily, weekly or monthly (got '$TIMER_EVERY')" ;; esac
   local self unitdir
   self="$(readlink -f "$0")"
   unitdir="$HOME/.config/systemd/user"
@@ -372,10 +380,10 @@ TimeoutStartSec=1800
 EOF
   cat > "$unitdir/${TIMER_NAME}.timer" <<EOF
 [Unit]
-Description=Weekly Claude Desktop update (distrobox) + base OS patches
+Description=Claude Desktop update (distrobox) + base OS patches, $TIMER_EVERY
 
 [Timer]
-OnCalendar=weekly
+OnCalendar=$TIMER_EVERY
 RandomizedDelaySec=1h
 Persistent=true
 
@@ -384,7 +392,7 @@ WantedBy=timers.target
 EOF
   systemctl --user daemon-reload
   systemctl --user enable --now "${TIMER_NAME}.timer"
-  log "Auto-update timer installed and enabled (weekly)."
+  log "Auto-update timer installed and enabled ($TIMER_EVERY)."
   log "Logs: journalctl --user -u ${TIMER_NAME}"
   systemctl --user list-timers "${TIMER_NAME}.timer" --no-pager 2>/dev/null || true
 }
@@ -414,6 +422,7 @@ while [[ $# -gt 0 ]]; do
     --version)      printf '%s\n' "$VERSION"; exit 0 ;;
     --gui)          GUI=1; shift ;;
     --notify)       NOTIFY=1; shift ;;
+    --every)        TIMER_EVERY="${2:?--every requires daily|weekly|monthly}"; shift 2 ;;
     --sandbox)      SANDBOX=1; shift ;;
     --isolate-home) ISOLATE_HOME=1; shift ;;
     --full-home)    ISOLATE_HOME=0; shift ;;
@@ -1183,15 +1192,16 @@ case "$ACTION" in
       if container_exists "$NAME"; then
         status="Claude Desktop is <b>installed</b> (container '$NAME')."
         if timer_enabled; then
-          status+="\nWeekly auto-update: <b>on</b>."
+          status+="\nAuto-update: <b>on</b> ($(timer_frequency))."
         else
-          status+="\nWeekly auto-update: <b>off</b>."
+          status+="\nAuto-update: <b>off</b>."
         fi
         rows+=(TRUE  update   "Update Claude now (app + container security patches)")
         if timer_enabled; then
-          rows+=(FALSE timer-off "Turn OFF weekly auto-update")
+          rows+=(FALSE timer-freq "Change auto-update frequency (daily / weekly / monthly)")
+          rows+=(FALSE timer-off  "Turn OFF auto-update")
         else
-          rows+=(FALSE timer-on  "Turn ON weekly auto-update (recommended)")
+          rows+=(FALSE timer-on   "Turn ON weekly auto-update (recommended)")
         fi
         rows+=(FALSE self     "Check for a newer version of this setup tool")
         rows+=(FALSE refresh  "Repair the app-menu entry / icon")
@@ -1224,9 +1234,23 @@ case "$ACTION" in
           run_with_progress "Enabling weekly auto-update…" --install-timer && \
             gui_info "Weekly auto-update is <b>on</b>.\n\nClaude and the container's security patches are refreshed every week; you get a desktop notification when a new version lands."
           ;;
+        timer-freq)
+          cur="$(timer_frequency)"
+          declare -a frows=()
+          for f in daily weekly monthly; do
+            if [[ "$f" == "$cur" ]]; then frows+=(TRUE "$f" "${f^} (current)"); else frows+=(FALSE "$f" "${f^}"); fi
+          done
+          freq="$(zenity --list --radiolist --width=420 --height=260 --title="$GUI_TITLE" \
+                    --text="How often should Claude and the container's security patches be updated?" \
+                    --column="" --column="id" --column="Frequency" --hide-column=2 --print-column=2 \
+                    "${frows[@]}" 2>/dev/null)" || continue
+          [[ -z "$freq" || "$freq" == "$cur" ]] && continue
+          run_with_progress "Setting auto-update to $freq…" --install-timer --every "$freq" && \
+            gui_info "Auto-update now runs <b>$freq</b>."
+          ;;
         timer-off)
-          run_with_progress "Disabling weekly auto-update…" --remove-timer && \
-            gui_info "Weekly auto-update is <b>off</b>."
+          run_with_progress "Disabling auto-update…" --remove-timer && \
+            gui_info "Auto-update is <b>off</b>."
           ;;
         self)
           "$SELF" --check-self-update --gui || true
