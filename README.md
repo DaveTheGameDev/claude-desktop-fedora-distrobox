@@ -132,6 +132,8 @@ The isolation here is about *"don't casually hand my whole home to a networked a
 
 No terminal needed.
 
+<p align="center"><img src="docs/setup-menu.png" width="520" alt="Claude Desktop Setup: install / update / auto-update / remove menu"></p>
+
 1. Download the latest **`claude-desktop-distrobox-*.noarch.rpm`** from the
    [Releases page](https://github.com/DaveTheGameDev/claude-desktop-fedora-distrobox/releases/latest).
 2. **Double-click** it — GNOME Software opens; click **Install**. This pulls in `distrobox`,
