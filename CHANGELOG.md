@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.3.0 — 2026-08-30
+
+- **Renamed**: the package is now `claude-desktop-fedora` (was `claude-desktop-distrobox`)
+  and the script is `claude-desktop-setup.sh` (was `install-claude-desktop-distrobox.sh`),
+  matching the repo's new name and the installed `claude-desktop-setup` command. Upgrading
+  replaces the old package automatically (`Obsoletes:`) — nothing to uninstall first, and
+  self-update from 1.1.1+ handles it on its own. Container, data, login and timers are untouched.
+
 ## 1.2.0 — 2026-08-30
 
 - **Native setup window**: Claude Desktop Setup is now a real GTK4/libadwaita window

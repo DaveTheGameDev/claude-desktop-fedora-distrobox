@@ -13,7 +13,7 @@ tagged release with a CHANGELOG entry crediting you, unless you'd rather not be 
 
 Anything in this repository:
 
-- the installer / setup script (`install-claude-desktop-distrobox.sh`), including its `--gui` mode
+- the installer / setup script (`claude-desktop-setup.sh`), including its `--gui` mode
 - the generated host launcher, `.desktop` entry, and systemd user units
 - the RPM spec and the release workflow
 - documentation that would lead a user to a less safe configuration than they think they have

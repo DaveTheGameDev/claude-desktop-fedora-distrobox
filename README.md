@@ -75,7 +75,7 @@ least-privilege setup** — and are willing to have ~1 GB of Ubuntu container fo
   └───────────────────────────┘                 └─────────────────────────────────────┘
 ```
 
-The installer (`install-claude-desktop-distrobox.sh`):
+The installer (`claude-desktop-setup.sh`):
 
 1. **Creates** an `ubuntu:24.04` distrobox container (podman, rootless).
 2. **Installs the official app** inside it from `https://downloads.claude.ai/claude-desktop/apt`,
@@ -138,10 +138,10 @@ No terminal needed.
 
 <p align="center"><img src="docs/setup-menu.png" width="520" alt="Claude Desktop Setup: Update now / Auto-update / Check for tool update / Advanced"></p>
 
-1. Download the latest **`claude-desktop-distrobox-*.noarch.rpm`** from the
+1. Download the latest **`claude-desktop-fedora-*.noarch.rpm`** from the
    [Releases page](https://github.com/DaveTheGameDev/claude-desktop-fedora/releases/latest).
 2. **Double-click** it — GNOME Software opens; click **Install**. This pulls in `distrobox`,
-   `podman` and `zenity` if you don't have them. (Or: `sudo dnf install ./claude-desktop-distrobox-*.rpm`.)
+   `podman` and `zenity` if you don't have them. (Or: `sudo dnf install ./claude-desktop-fedora-*.rpm`.)
 3. Open **Claude Desktop Setup** from your app menu and click **Install…**.
    Want to let Claude (Cowork / Code) work on one of your folders? Pick *Also share one folder*
    in the next step. The first run downloads a few hundred MB and takes a few minutes.
@@ -166,7 +166,7 @@ No terminal needed.
   updates** switch, which only ever notifies.
 
 **Removing:** Claude Desktop Setup → **Advanced → Remove Claude Desktop**. Your login/chat data are kept unless
-you tick *Delete data too*. Then `sudo dnf remove claude-desktop-distrobox` if you also want the
+you tick *Delete data too*. Then `sudo dnf remove claude-desktop-fedora` if you also want the
 setup tool gone.
 
 > The RPM installs just two files (`/usr/bin/claude-desktop-setup` and the app-menu entry).
@@ -196,13 +196,13 @@ The RPM above is just this script plus a `.desktop` file. From a clone:
 ```bash
 git clone https://github.com/DaveTheGameDev/claude-desktop-fedora.git
 cd claude-desktop-fedora
-chmod +x install-claude-desktop-distrobox.sh
+chmod +x claude-desktop-setup.sh
 
 # Default = privacy-hardened: sandbox home + isolated network.
-./install-claude-desktop-distrobox.sh
+./claude-desktop-setup.sh
 
 # …or the same thing with dialogs instead of terminal output:
-./install-claude-desktop-distrobox.sh --gui
+./claude-desktop-setup.sh --gui
 ```
 
 Build the RPM yourself with `packaging/build-rpm.sh` (needs `rpm-build`, `rpmdevtools`,
@@ -215,7 +215,7 @@ needs root — everything else is rootless).
 Want to work on real project folders (Cowork/Code)? Grant them explicitly:
 
 ```bash
-./install-claude-desktop-distrobox.sh --share ~/Projects --share ~/Notes
+./claude-desktop-setup.sh --share ~/Projects --share ~/Notes
 ```
 
 ## Use it
@@ -235,8 +235,8 @@ container's apt. So updates happen only when you (or the timer) run them.
 **Manually:**
 
 ```bash
-./install-claude-desktop-distrobox.sh --update          # app only
-./install-claude-desktop-distrobox.sh --update --full   # app + container base-OS security patches
+./claude-desktop-setup.sh --update          # app only
+./claude-desktop-setup.sh --update --full   # app + container base-OS security patches
 ```
 
 The update reports the version change (`old → new`, or "already the newest version").
@@ -252,10 +252,10 @@ The same flow, with progress and result dialogs (`--update --full --gui`).
 and sends a desktop notification when something changed:
 
 ```bash
-./install-claude-desktop-distrobox.sh --install-timer                  # enable (weekly)
-./install-claude-desktop-distrobox.sh --install-timer --every daily    # or daily / monthly; re-run to change
-./install-claude-desktop-distrobox.sh --install-timer --tool-check     # also notify about new setup-tool releases
-./install-claude-desktop-distrobox.sh --remove-timer                   # disable
+./claude-desktop-setup.sh --install-timer                  # enable (weekly)
+./claude-desktop-setup.sh --install-timer --every daily    # or daily / monthly; re-run to change
+./claude-desktop-setup.sh --install-timer --tool-check     # also notify about new setup-tool releases
+./claude-desktop-setup.sh --remove-timer                   # disable
 
 # inspect it
 systemctl --user list-timers claude-desktop-update.timer  # next run
@@ -288,8 +288,8 @@ icon. If the setup window itself was open, close and reopen it to run the new ve
 ## Remove it
 
 ```bash
-./install-claude-desktop-distrobox.sh --remove            # container + launcher + timer (keeps login data)
-./install-claude-desktop-distrobox.sh --remove --purge    # also wipe the sandbox home (deletes login/data)
+./claude-desktop-setup.sh --remove            # container + launcher + timer (keeps login data)
+./claude-desktop-setup.sh --remove --purge    # also wipe the sandbox home (deletes login/data)
 ```
 
 `--remove` cleans up the container, the host launcher/`.desktop`/icon, and the auto-update timer.
@@ -338,7 +338,7 @@ Description=Update Claude Desktop (distrobox) + container base OS security patch
 
 [Service]
 Type=oneshot
-ExecStart=/bin/bash /path/to/install-claude-desktop-distrobox.sh --update --full --notify --name claude-desktop
+ExecStart=/bin/bash /path/to/claude-desktop-setup.sh --update --full --notify --name claude-desktop
 TimeoutStartSec=1800
 ```
 
@@ -366,7 +366,7 @@ your session bus (`notify-send`); if none is reachable the run is still fully lo
 
 ## Releasing (maintainers)
 
-1. Bump `VERSION="X.Y.Z"` at the top of `install-claude-desktop-distrobox.sh` and add a section
+1. Bump `VERSION="X.Y.Z"` at the top of `claude-desktop-setup.sh` and add a section
    `## X.Y.Z — YYYY-MM-DD` to `CHANGELOG.md`.
 2. Commit, then `git tag vX.Y.Z && git push --tags`.
 3. The `Release` workflow builds the noarch RPM in a Fedora container, refuses to run if the tag and
@@ -398,7 +398,7 @@ your session bus (`notify-send`); if none is reachable the run is still fully lo
   the restart; timer runs log a warning in the journal instead of killing your session.
 - **The dock shows a second, icon-less entry when the app is running** — the shell couldn't tie the
   window to the launcher's `.desktop` entry, so it drew an unknown-app tile next to it. Fix it with
-  `./install-claude-desktop-distrobox.sh --refresh-launcher` (no reinstall, no data loss), then log
+  `./claude-desktop-setup.sh --refresh-launcher` (no reinstall, no data loss), then log
   out and back in. That rebuild pins the window class (`--class` + a matching `StartupWMClass`) and
   installs the icons into `~/.local/share/icons/hicolor/` under every name the shell might look up,
   so the window and the launcher share one dock entry — and one icon. If you still see two, run it
@@ -411,7 +411,7 @@ your session bus (`notify-send`); if none is reachable the run is still fully lo
   those paths don't exist inside the container, so the import silently fails. The
   installer mounts `~/Documents`, `~/Desktop`, `~/Pictures` (read-only) and `~/Downloads` at their
   real paths, which fixes both. Containers created by a pre-release build need a one-off rebuild:
-  `./install-claude-desktop-distrobox.sh --recreate` (or **Rebuild the container** in the GUI) —
+  `./claude-desktop-setup.sh --recreate` (or **Rebuild the container** in the GUI) —
   login and chats are kept. Files elsewhere still need `--share <dir>`.
 - **Cowork/Code can't see my files** — that's the isolation working. Re-create with
   `--recreate --share <dir>` for the folders you want it to access.

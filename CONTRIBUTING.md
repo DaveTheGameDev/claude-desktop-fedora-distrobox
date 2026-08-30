@@ -15,13 +15,13 @@ Open an issue with:
 
 ## Changing the code
 
-Everything lives in one script, `install-claude-desktop-distrobox.sh`. The GUI setup app is the
+Everything lives in one script, `claude-desktop-setup.sh`. The GUI setup app is the
 same script with `--gui`. Packaging is in `packaging/`, and the release workflow builds the RPM
 from a tag.
 
 Before opening a PR:
 
-1. `bash -n install-claude-desktop-distrobox.sh` and `shellcheck` it — keep it clean.
+1. `bash -n claude-desktop-setup.sh` and `shellcheck` it — keep it clean.
 2. Test the path you touched for real: `--recreate` for install changes, `--update` for update
    changes, `--remove` then reinstall if you touched cleanup. Test both `--gui` and terminal
    modes if the change affects prompts.

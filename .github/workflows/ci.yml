@@ -14,12 +14,12 @@ jobs:
         run: dnf install -y --setopt=install_weak_deps=False --disablerepo='*openh264*' git rpm-build rpmdevtools rpmlint desktop-file-utils ShellCheck
       - uses: actions/checkout@v4
       - name: shellcheck
-        run: shellcheck -S warning install-claude-desktop-distrobox.sh packaging/build-rpm.sh
+        run: shellcheck -S warning claude-desktop-setup.sh packaging/build-rpm.sh
       - name: Validate desktop file
         run: desktop-file-validate packaging/claude-desktop-setup.desktop
       - name: Dry RPM build (uses the script's own VERSION)
         run: |
-          v="$(sed -n 's/^VERSION="\([^"]*\)".*/\1/p' install-claude-desktop-distrobox.sh)"
+          v="$(sed -n 's/^VERSION="\([^"]*\)".*/\1/p' claude-desktop-setup.sh)"
           packaging/build-rpm.sh "$v"
       - name: rpmlint (informational)
         run: rpmlint dist/*.rpm || true

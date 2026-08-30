@@ -1,7 +1,10 @@
 # Built by packaging/build-rpm.sh, which passes the version in from the git tag.
 %{!?version: %define version 0.0.0}
 
-Name:           claude-desktop-distrobox
+Name:           claude-desktop-fedora
+# Renamed from claude-desktop-distrobox at 1.3.0; upgrades replace the old package.
+Obsoletes:      claude-desktop-distrobox < 1.3.0
+Provides:       claude-desktop-distrobox = %{version}-%{release}
 Version:        %{version}
 Release:        1%{?dist}
 Summary:        Official Claude Desktop on Fedora via distrobox, privacy-hardened
@@ -9,7 +12,7 @@ License:        MIT
 URL:            https://github.com/DaveTheGameDev/claude-desktop-fedora
 BuildArch:      noarch
 
-Source0:        install-claude-desktop-distrobox.sh
+Source0:        claude-desktop-setup.sh
 Source1:        claude-desktop-setup.desktop
 Source2:        README.md
 Source3:        LICENSE

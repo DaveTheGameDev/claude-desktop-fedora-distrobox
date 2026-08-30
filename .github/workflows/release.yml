@@ -18,12 +18,12 @@ jobs:
       - name: Tag must match VERSION in the script
         run: |
           tag="${GITHUB_REF_NAME#v}"
-          v="$(sed -n 's/^VERSION="\([^"]*\)".*/\1/p' install-claude-desktop-distrobox.sh)"
+          v="$(sed -n 's/^VERSION="\([^"]*\)".*/\1/p' claude-desktop-setup.sh)"
           if [ "$tag" != "$v" ]; then
             echo "::error::tag $GITHUB_REF_NAME does not match VERSION=\"$v\" in the script"; exit 1
           fi
       - name: shellcheck
-        run: shellcheck -S warning install-claude-desktop-distrobox.sh packaging/build-rpm.sh
+        run: shellcheck -S warning claude-desktop-setup.sh packaging/build-rpm.sh
       - name: Build RPM
         run: packaging/build-rpm.sh "${GITHUB_REF_NAME#v}"
       - name: rpmlint (informational)
@@ -43,7 +43,7 @@ jobs:
           ### Install on Fedora
           Download the `.rpm` below and double-click it (GNOME Software), or:
           ```bash
-          sudo dnf install ./claude-desktop-distrobox-*.noarch.rpm
+          sudo dnf install ./claude-desktop-fedora-*.noarch.rpm
           ```
           Then open **Claude Desktop Setup** from your app menu.
           MD
