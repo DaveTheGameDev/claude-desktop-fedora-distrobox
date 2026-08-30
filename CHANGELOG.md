@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.2.0 — 2026-08-30
+
+- **Native setup window**: Claude Desktop Setup is now a real GTK4/libadwaita window
+  (python3-gobject, preinstalled on Fedora Workstation) instead of a zenity button dialog —
+  action rows for *Update now* and *Check for tool update*, an **Auto-update** schedule
+  selector (*Off / Daily / Weekly / Monthly*, one click applies), and maintenance/removal
+  tucked into an *Advanced* expander. Settings apply in place with a toast — the window no
+  longer closes and reopens for them. Without the GTK bindings it falls back to the same
+  actions as stacked zenity buttons.
+- **No more Settings… sub-menu**: auto-update and the setup-tool update check live right in
+  the main window; only repair / rebuild / remove stay under *Advanced*.
+- **Opt-in scheduled tool-update check**: an *Also check for setup-tool updates* switch in
+  the Auto-update section (CLI: `--install-timer --tool-check`) makes the update timer also ask
+  GitHub whether a newer setup tool exists and send a desktop notification. Strictly
+  notify-only and off by default — without it the tool still never contacts GitHub in the
+  background.
+
 ## 1.1.1 — 2026-08-30
 
 - **The setup tool can update itself**: *Advanced… → Check for a newer setup tool* (or

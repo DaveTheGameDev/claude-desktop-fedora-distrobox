@@ -20,6 +20,9 @@ Requires:       bash
 Requires:       distrobox
 Requires:       podman
 Requires:       zenity
+# Native GTK4 setup window; falls back to zenity dialogs without these.
+Recommends:     python3-gobject
+Recommends:     libadwaita
 Requires:       /usr/bin/notify-send
 Requires:       xdg-utils
 Requires:       curl

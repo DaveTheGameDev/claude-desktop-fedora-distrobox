@@ -136,7 +136,7 @@ The isolation here is about *"don't casually hand my whole home to a networked a
 
 No terminal needed.
 
-<p align="center"><img src="docs/setup-menu.png" width="520" alt="Claude Desktop Setup: Update now / Settings / Advanced"></p>
+<p align="center"><img src="docs/setup-menu.png" width="520" alt="Claude Desktop Setup: Update now / Auto-update / Check for tool update / Advanced"></p>
 
 1. Download the latest **`claude-desktop-distrobox-*.noarch.rpm`** from the
    [Releases page](https://github.com/DaveTheGameDev/claude-desktop-fedora-distrobox/releases/latest).
@@ -153,16 +153,19 @@ No terminal needed.
   the container's security patches, and if Claude is running the old version it offers to restart it.
 - Or right-click the **Claude** icon → **Claude Desktop Settings** (same as opening **Claude Desktop
   Setup** from the app menu) → **Update now**.
-- **Settings…** → **Auto-update** drop-down: *Off*, *Daily*, *Weekly* (default) or *Monthly*. A systemd
-  *user* timer runs the update and shows a desktop notification when a new version landed
-  ("restart Claude to apply").
-- **Advanced… → Check for a newer setup tool** asks GitHub once. If a newer release exists and you
+- **Auto-update** sits right in the main window: click *Off*, *Daily*, *Weekly* (default) or
+  *Monthly* on the schedule selector and it applies at once. A systemd *user* timer runs the
+  update and shows a desktop notification when a new version landed ("restart Claude to apply").
+  An optional **Also check for setup-tool updates** switch makes the same timer ask GitHub for a
+  newer setup tool and notify you — notify-only, nothing installs by itself (off by default).
+- **Check for tool update** (also on the main window) asks GitHub once. If a newer release exists and you
   installed the RPM, it offers to download it, verify it against the release's `SHA256SUMS` and
   install it (polkit asks for your password) — like an app-store update. From a git checkout it just
-  opens the download page. That is the *only* time this tool ever contacts GitHub — it never checks
-  in the background.
+  opens the download page. Out of the box that is the *only* time this tool ever contacts GitHub —
+  it never checks in the background unless you enable the opt-in **Also check for setup-tool
+  updates** switch, which only ever notifies.
 
-**Removing:** Claude Desktop Setup → **Advanced… → Remove Claude Desktop…**. Your login/chat data are kept unless
+**Removing:** Claude Desktop Setup → **Advanced → Remove Claude Desktop**. Your login/chat data are kept unless
 you tick *Delete data too*. Then `sudo dnf remove claude-desktop-distrobox` if you also want the
 setup tool gone.
 
@@ -251,6 +254,7 @@ and sends a desktop notification when something changed:
 ```bash
 ./install-claude-desktop-distrobox.sh --install-timer                  # enable (weekly)
 ./install-claude-desktop-distrobox.sh --install-timer --every daily    # or daily / monthly; re-run to change
+./install-claude-desktop-distrobox.sh --install-timer --tool-check     # also notify about new setup-tool releases
 ./install-claude-desktop-distrobox.sh --remove-timer                   # disable
 
 # inspect it
@@ -265,9 +269,11 @@ Updates are quick and non-destructive; your login/data persist.
 
 The setup tool is separate from the app and is versioned with this repo's
 [GitHub Releases](https://github.com/DaveTheGameDev/claude-desktop-fedora-distrobox/releases).
-It **never** checks for its own updates in the background — only when you ask:
+By default it **never** checks for its own updates in the background — only when you ask (or on
+the auto-update schedule, if you enable the notify-only **Also check for setup-tool updates**
+switch / `--install-timer --tool-check`):
 
-- GUI: **Claude Desktop Settings → Advanced… → Check for a newer setup tool**
+- GUI: **Claude Desktop Settings → Check for tool update**
 - Terminal: `claude-desktop-setup --check-self-update`
 
 If a newer release exists and you installed the **RPM**, it offers to download the release's

@@ -49,7 +49,7 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 # Config / defaults
 # ---------------------------------------------------------------------------
-VERSION="1.1.1"                # keep in sync with the git tag vX.Y.Z (CI enforces)
+VERSION="1.2.0"                # keep in sync with the git tag vX.Y.Z (CI enforces)
 REPO_SLUG="DaveTheGameDev/claude-desktop-fedora-distrobox"
 RELEASES_URL="https://github.com/$REPO_SLUG/releases/latest"
 RELEASES_API="https://api.github.com/repos/$REPO_SLUG/releases/latest"
@@ -67,6 +67,8 @@ PURGE=0                        # remove: also delete the dedicated home dir
 GUI=0                          # 1 => zenity dialogs instead of terminal prompts
 NOTIFY=0                       # 1 => desktop notification when an update finishes
 TIMER_EVERY="weekly"           # install-timer: daily | weekly | monthly
+TIMER_TOOL_CHECK=0             # install-timer: also run the notify-only
+                               #      setup-tool update check on the schedule
 ACTION_SET=0                   # whether an explicit action flag was given
 BOX_HOME="$HOME/.local/share/claude-desktop-box"   # dedicated container home
 REAL_HOME="$HOME"              # the real host home (never mounted when isolating)
@@ -195,6 +197,9 @@ GUI options:
   --gui            Use desktop dialogs (zenity) instead of terminal prompts.
                    Alone, opens the "Claude Desktop Setup" menu; combined with
                    an action (e.g. --update --gui) runs that action with dialogs.
+  --tool-check     With --install-timer: the timer also asks GitHub whether a
+                   newer setup tool exists and shows a notification.
+                   Notify-only — it never installs anything by itself.
   --notify         Send a desktop notification when an update finishes
                    (used by the auto-update timer).
 
@@ -361,13 +366,20 @@ timer_frequency() {
   # Print daily|weekly|monthly from the installed timer unit (empty if none).
   sed -n 's/^OnCalendar=//p' "$HOME/.config/systemd/user/${TIMER_NAME}.timer" 2>/dev/null
 }
+timer_tool_check() {
+  # Does the installed timer also run the notify-only setup-tool check?
+  grep -qs -- '--self-check-notify' "$HOME/.config/systemd/user/${TIMER_NAME}.service"
+}
 install_timer() {
   command -v systemctl >/dev/null 2>&1 || die "systemctl not found — this needs a systemd user session."
   case "$TIMER_EVERY" in daily|weekly|monthly) ;; *) die "--every must be daily, weekly or monthly (got '$TIMER_EVERY')" ;; esac
-  local self unitdir
+  local self unitdir toolexec=""
   self="$(readlink -f "$0")"
   unitdir="$HOME/.config/systemd/user"
   mkdir -p "$unitdir"
+  # Opt-in second step: ask GitHub whether a newer setup tool exists and send
+  # a desktop notification. Notify-only — nothing is ever installed by itself.
+  [[ $TIMER_TOOL_CHECK -eq 1 ]] && toolexec="ExecStart=/bin/bash $self --self-check-notify"
   cat > "$unitdir/${TIMER_NAME}.service" <<EOF
 [Unit]
 Description=Update Claude Desktop (distrobox) + container base OS security patches
@@ -379,6 +391,7 @@ Type=oneshot
 # can land inside the few seconds before the network is back up. Wait it out.
 ExecStartPre=/usr/bin/sleep 30
 ExecStart=/bin/bash $self --update --full --notify --name $NAME
+$toolexec
 TimeoutStartSec=1800
 EOF
   cat > "$unitdir/${TIMER_NAME}.timer" <<EOF
@@ -395,7 +408,11 @@ WantedBy=timers.target
 EOF
   systemctl --user daemon-reload
   systemctl --user enable --now "${TIMER_NAME}.timer"
-  log "Auto-update timer installed and enabled ($TIMER_EVERY)."
+  if [[ $TIMER_TOOL_CHECK -eq 1 ]]; then
+    log "Auto-update timer installed and enabled ($TIMER_EVERY; also checks for setup-tool updates)."
+  else
+    log "Auto-update timer installed and enabled ($TIMER_EVERY)."
+  fi
   log "Logs: journalctl --user -u ${TIMER_NAME}"
   systemctl --user list-timers "${TIMER_NAME}.timer" --no-pager 2>/dev/null || true
 }
@@ -423,10 +440,12 @@ while [[ $# -gt 0 ]]; do
     --print-inner)    ACTION="print-inner"; ACTION_SET=1; shift ;;
     --check-self-update) ACTION="self-check"; ACTION_SET=1; shift ;;
     --self-update)  ACTION="self-update"; ACTION_SET=1; shift ;;
+    --self-check-notify) ACTION="self-check-notify"; ACTION_SET=1; shift ;;
     --version)      printf '%s\n' "$VERSION"; exit 0 ;;
     --gui)          GUI=1; shift ;;
     --notify)       NOTIFY=1; shift ;;
     --every)        TIMER_EVERY="${2:?--every requires daily|weekly|monthly}"; shift 2 ;;
+    --tool-check)   TIMER_TOOL_CHECK=1; shift ;;
     --sandbox)      SANDBOX=1; shift ;;
     --isolate-home) ISOLATE_HOME=1; shift ;;
     --full-home)    ISOLATE_HOME=0; shift ;;
@@ -465,8 +484,9 @@ if [[ "$ACTION" == "remove-timer" ]]; then remove_timer; exit 0; fi
 
 # ---------------------------------------------------------------------------
 # Self-update: one request to the GitHub Releases API, only when the user
-# asks for it (menu row, --check-self-update or --self-update). Never runs
-# from the timer. RPM installs can upgrade in place (download + sha256 check +
+# asks for it (menu row, --check-self-update or --self-update) or — strictly
+# opt-in, via --tool-check on the auto-update timer — as a scheduled
+# notify-only check that never installs anything by itself. RPM installs can upgrade in place (download + sha256 check +
 # pkexec dnf); git checkouts are just pointed at the releases page.
 # ---------------------------------------------------------------------------
 # Installed from the RPM (as opposed to a git checkout)? Only then can we
@@ -514,6 +534,7 @@ self_update_install() {
 }
 
 # $1 = "check" (ask before installing) | "update" (install without asking)
+#    | "notify" (timer: desktop notification only, install nothing)
 self_check() {
   local mode="${1:-check}" json tag latest
   log "Checking $REPO_SLUG for a newer release (you have $VERSION) ..."
@@ -531,6 +552,11 @@ self_check() {
     return 0
   fi
   log "A newer version is available: $latest (you have $VERSION): $RELEASES_URL"
+  if [[ "$mode" == "notify" ]]; then
+    notify_user "Claude Desktop Setup $latest is available" \
+      "Open Claude Desktop Setup → Check for tool update to install it."
+    return 0
+  fi
   if rpm_installed && command -v pkexec >/dev/null 2>&1; then
     local go=0
     if [[ "$mode" == "update" ]]; then
@@ -553,6 +579,7 @@ self_check() {
 }
 if [[ "$ACTION" == "self-check" ]]; then self_check check; exit; fi
 if [[ "$ACTION" == "self-update" ]]; then self_check update; exit; fi
+if [[ "$ACTION" == "self-check-notify" ]]; then self_check notify; exit; fi
 
 # ---------------------------------------------------------------------------
 # Sanity checks
@@ -1258,106 +1285,337 @@ case "$ACTION" in
     ;;
 
   gui-menu)
-    # The "Claude Desktop Setup" app. Plain buttons for actions, a drop-down
-    # for settings; radio lists only where there is a genuine choice. Every
-    # button re-invokes this script with the matching CLI flags behind a
-    # progress dialog, so GUI and CLI share one code path. Loops until closed.
+    # The "Claude Desktop Setup" window. Native GTK4/libadwaita when the
+    # Python bindings are present (Fedora Workstation ships them); plain
+    # zenity buttons otherwise. Either way the window only *picks* an action
+    # token — every action re-invokes this script with the matching CLI flags
+    # behind a progress dialog, so GUI and CLI share one code path. Loops
+    # until closed.
     timer_enabled() { systemctl --user is-enabled "${TIMER_NAME}.timer" >/dev/null 2>&1; }
-    # gui_buttons TEXT BUTTON... : show TEXT with one button per argument
-    # (the last one is the "close" button); print the label that was pressed.
+    have_gtk_menu() {
+      python3 -c 'import gi; gi.require_version("Gtk","4.0"); gi.require_version("Adw","1")' 2>/dev/null
+    }
+    # gui_buttons TEXT BUTTON... : show TEXT with one button per argument,
+    # stacked top-to-bottom in the order given; print the label that was
+    # pressed. zenity stacks --extra-button entries bottom-up, so pass them
+    # in reverse to get the listed order on screen.
     gui_buttons() {
       local text="$1"; shift
       local -a extra=()
-      local b
-      for b in "$@"; do extra+=(--extra-button="$b"); done
+      local i
+      for ((i=$#; i>=1; i--)); do extra+=(--extra-button="${!i}"); done
       zenity --question --switch --width=520 --title="$GUI_TITLE" --icon=dialog-information \
              --text="$text" "${extra[@]}" 2>/dev/null || true
       # zenity exits 1 for every --extra-button press; the label on stdout is
       # what matters, so never let that status trip set -e.
     }
-    while :; do
-      if container_exists "$NAME"; then
-        if timer_enabled; then
-          freq="$(timer_frequency)"
-          status="Claude Desktop is <b>installed</b>.\nAuto-update: <b>on</b>, ${freq}."
-        else
-          status="Claude Desktop is <b>installed</b>.\nAuto-update: <b>off</b>."
+    # gtk_menu INSTALLED FREQ TOOLCHECK : native window. Prints one token:
+    # update | self-check | repair | rebuild | remove | install |
+    # install-share | close. Settings (schedule, tool check) apply in place
+    # inside the window — only the zenity fallback still emits the
+    # auto:<…> / toolcheck:<on|off> tokens for them.
+    gtk_menu() {
+      python3 - "$1" "$2" "$3" "$GUI_TITLE" "$SELF" "$NAME" <<'PYEOF'
+import sys
+import gi
+gi.require_version("Gtk", "4.0")
+gi.require_version("Adw", "1")
+from gi.repository import Gtk, Adw, Gio
+
+installed = sys.argv[1] == "1"
+freq = sys.argv[2]
+toolcheck = sys.argv[3] == "1"
+title = sys.argv[4]
+selfpath = sys.argv[5]
+boxname = sys.argv[6]
+chosen = []
+
+
+class Setup(Adw.Application):
+    def __init__(self):
+        super().__init__(application_id="io.github.claude_desktop_distrobox.Setup",
+                         flags=Gio.ApplicationFlags.NON_UNIQUE)
+        self.freq = freq
+        self.tool = toolcheck
+
+    def pick(self, token):
+        chosen.append(token)
+        self.quit()
+
+    def row(self, rtitle, subtitle, token):
+        r = Adw.ActionRow(title=rtitle, activatable=True)
+        if subtitle:
+            r.set_subtitle(subtitle)
+        r.add_suffix(Gtk.Image.new_from_icon_name("go-next-symbolic"))
+        r.connect("activated", lambda *_: self.pick(token))
+        return r
+
+    # --- in-place settings -------------------------------------------
+    # Schedule and tool-check changes run the (quick) systemd commands
+    # directly and resync the widgets, so the window does not close and
+    # reopen for a settings change. Heavy actions still exit with a token.
+    def on_sched(self, btn, val):
+        if btn.get_active() and val != self.freq:
+            self.apply_timer(val, self.tool if val != "off" else False)
+
+    def on_tool(self, row, *_):
+        if row.get_active() != self.tool:
+            self.apply_timer(self.freq, row.get_active())
+
+    def apply_timer(self, new_freq, new_tool):
+        if new_freq == "off":
+            cmd = ["/bin/bash", selfpath, "--remove-timer"]
+        else:
+            cmd = ["/bin/bash", selfpath, "--install-timer",
+                   "--every", new_freq, "--name", boxname]
+            if new_tool:
+                cmd.append("--tool-check")
+        self.sched_box.set_sensitive(False)
+        self.tsw.set_sensitive(False)
+        try:
+            proc = Gio.Subprocess.new(
+                cmd,
+                Gio.SubprocessFlags.STDOUT_SILENCE | Gio.SubprocessFlags.STDERR_SILENCE)
+        except Exception:
+            self.finish_apply(False, new_freq, new_tool)
+            return
+        proc.wait_check_async(None, self.on_applied, (new_freq, new_tool))
+
+    def on_applied(self, proc, res, data):
+        try:
+            ok = proc.wait_check_finish(res)
+        except Exception:
+            ok = False
+        self.finish_apply(ok, *data)
+
+    def finish_apply(self, ok, new_freq, new_tool):
+        if ok:
+            if new_freq != self.freq:
+                msg = ("Auto-update turned off" if new_freq == "off"
+                       else "Auto-update set to " + new_freq)
+            else:
+                msg = ("Tool-update check enabled" if new_tool
+                       else "Tool-update check disabled")
+            self.freq, self.tool = new_freq, new_tool
+        else:
+            msg = "Could not change the setting"
+        # Resync every widget to the real state (reverts the click on failure).
+        for b, _v, h in self.sched_btns:
+            b.handler_block(h)
+        for b, v, _h in self.sched_btns:
+            b.set_active(v == self.freq)
+        for b, _v, h in self.sched_btns:
+            b.handler_unblock(h)
+        self.tsw.handler_block(self.tsw_handler)
+        self.tsw.set_active(self.tool)
+        self.tsw.handler_unblock(self.tsw_handler)
+        self.sched_box.set_sensitive(True)
+        self.tsw.set_sensitive(self.freq != "off")
+        self.overlay.add_toast(Adw.Toast(title=msg))
+
+    def do_activate(self):
+        # A plain box (no internal scroller) in a non-resizable window: the
+        # window always hugs the content's natural height, growing when
+        # "Advanced" expands and shrinking back when it collapses.
+        page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=24,
+                       width_request=450,
+                       margin_top=18, margin_bottom=6,
+                       margin_start=16, margin_end=16)
+        if installed:
+            g = Adw.PreferencesGroup(description="Claude Desktop is installed.")
+            g.add(self.row("Update now",
+                           "Update the app and the container's security patches", "update"))
+            g.add(self.row("Check for tool update",
+                           "Ask GitHub once for a newer setup tool — it never checks in the background",
+                           "self-check"))
+            page.append(g)
+
+            ga = Adw.PreferencesGroup(
+                title="Auto-update",
+                description="Keeps Claude and the container's security patches current in the "
+                            "background; you get a notification when a new version lands.")
+            sched = Adw.ActionRow(title="Schedule")
+            box = Gtk.Box(valign=Gtk.Align.CENTER)
+            box.add_css_class("linked")
+            self.sched_box = box
+            self.sched_btns = []
+            lead = None
+            for lbl, val in (("Off", "off"), ("Daily", "daily"),
+                             ("Weekly", "weekly"), ("Monthly", "monthly")):
+                b = Gtk.ToggleButton(label=lbl)
+                if lead is None:
+                    lead = b
+                else:
+                    b.set_group(lead)
+                b.set_active(val == self.freq)
+                h = b.connect("toggled", self.on_sched, val)
+                self.sched_btns.append((b, val, h))
+                box.append(b)
+            sched.add_suffix(box)
+            ga.add(sched)
+            tsw = Adw.SwitchRow(
+                title="Also check for setup-tool updates",
+                subtitle="Asks GitHub on the same schedule and notifies you — "
+                         "nothing installs by itself",
+                active=self.tool,
+                sensitive=(self.freq != "off"))
+            self.tsw = tsw
+            self.tsw_handler = tsw.connect("notify::active", self.on_tool)
+            ga.add(tsw)
+            page.append(ga)
+
+            gadv = Adw.PreferencesGroup(title="Advanced")
+            exp = Adw.ExpanderRow(title="Maintenance and removal",
+                                  subtitle="Repair, rebuild or remove")
+            exp.add_row(self.row("Repair app-menu entry",
+                                 "Rebuild the launcher and its icon", "repair"))
+            exp.add_row(self.row("Rebuild container",
+                                 "Re-create the container with current settings — login and chats are kept",
+                                 "rebuild"))
+            exp.add_row(self.row("Remove Claude Desktop",
+                                 "Delete the container, app-menu entry and update timer", "remove"))
+            gadv.add(exp)
+            page.append(gadv)
+        else:
+            g = Adw.PreferencesGroup(
+                description="Claude Desktop is not installed yet. Install Anthropic's official, "
+                            "signed app in a privacy-hardened container: your real home stays "
+                            "hidden; the app gets its own private folder and network. First run "
+                            "downloads a few hundred MB.")
+            g.add(self.row("Install", "Privacy-hardened (recommended)", "install"))
+            g.add(self.row("Install and share one folder",
+                           "Lets Claude (Cowork / Code) work on a folder you pick", "install-share"))
+            g.add(self.row("Check for tool update",
+                           "Ask GitHub once for a newer setup tool", "self-check"))
+            page.append(g)
+
+        tv = Adw.ToolbarView()
+        tv.add_top_bar(Adw.HeaderBar())
+        tv.set_content(Adw.Clamp(child=page, maximum_size=560))
+        close = Gtk.Button(label="Close", halign=Gtk.Align.END,
+                           margin_top=6, margin_bottom=10, margin_end=14)
+        close.connect("clicked", lambda *_: self.quit())
+        tv.add_bottom_bar(close)
+
+        self.overlay = Adw.ToastOverlay(child=tv)
+        win = Adw.ApplicationWindow(application=self, title=title,
+                                    resizable=False)
+        win.set_content(self.overlay)
+        win.present()
+
+
+Setup().run([sys.argv[0]])
+print(chosen[0] if chosen else "close")
+PYEOF
+    }
+    # zenity_menu INSTALLED FREQ TOOLCHECK : same tokens via zenity buttons.
+    zenity_menu() {
+      local installed="$1" freq="$2" tool="$3" choice sel adv o
+      if [[ "$installed" == 1 ]]; then
+        local -a au_btns=() tc_btn=()
+        for o in Off Daily Weekly Monthly; do
+          if [[ "${o,,}" == "$freq" ]]; then au_btns+=("Auto-update: $o ✔"); else au_btns+=("Auto-update: $o"); fi
+        done
+        if [[ "$freq" != "off" ]]; then
+          if [[ "$tool" -eq 1 ]]; then tc_btn=("Scheduled tool check: On ✔"); else tc_btn=("Scheduled tool check: Off"); fi
         fi
-        choice="$(gui_buttons "$status" "Update now" "Settings…" "Advanced…" "Close")"
+        choice="$(gui_buttons "Claude Desktop is <b>installed</b>.\n\nAuto-update keeps Claude and the container's security patches current in the background — click the schedule you want (✔ marks the current one)." \
+                    "Update now" "Check for tool update" "${au_btns[@]}" "${tc_btn[@]}" "Advanced…" "Close")"
       else
-        status="Claude Desktop is <b>not installed</b> yet.\n\nInstall Anthropic's official, signed app in a privacy-hardened container. Your real home stays hidden; the app gets its own private folder and network. First run downloads a few hundred MB."
-        choice="$(gui_buttons "$status" "Install…" "Check for a newer setup tool" "Close")"
+        choice="$(gui_buttons "Claude Desktop is <b>not installed</b> yet.\n\nInstall Anthropic's official, signed app in a privacy-hardened container. Your real home stays hidden; the app gets its own private folder and network. First run downloads a few hundred MB." \
+                    "Install…" "Install and share one folder…" "Check for tool update" "Close")"
       fi
       case "$choice" in
-        "Install…")
-          how="$(zenity --list --radiolist --width=520 --height=220 --title="$GUI_TITLE" \
-                   --text="How should Claude be installed?" \
-                   --column="" --column="id" --column="Option" --hide-column=2 --print-column=2 \
-                   TRUE  plain "Privacy-hardened (recommended)" \
-                   FALSE share "Also share one folder with the app (for Cowork / Code)" 2>/dev/null)" || continue
-          share=()
-          if [[ "$how" == "share" ]]; then
+        "Update now")            echo update ;;
+        "Check for tool update") echo self-check ;;
+        "Auto-update: "*)        sel="${choice#Auto-update: }"; sel="${sel%% ✔}"; echo "auto:${sel,,}" ;;
+        "Scheduled tool check: On ✔") echo toolcheck:off ;;
+        "Scheduled tool check: Off")  echo toolcheck:on ;;
+        "Install…")              echo install ;;
+        "Install and share one folder…") echo install-share ;;
+        "Advanced…")
+          adv="$(gui_buttons "Maintenance and removal." \
+                   "Repair app-menu entry" "Rebuild container" "Remove Claude Desktop…" "Back")"
+          case "$adv" in
+            "Repair app-menu entry")   echo repair ;;
+            "Rebuild container")       echo rebuild ;;
+            "Remove Claude Desktop…")  echo remove ;;
+            *)                         echo again ;;
+          esac
+          ;;
+        *) echo close ;;
+      esac
+    }
+    while :; do
+      installed=0; container_exists "$NAME" && installed=1
+      freq="off"
+      [[ $installed -eq 1 ]] && timer_enabled && freq="$(timer_frequency)"
+      tool=0
+      [[ "$freq" != "off" ]] && timer_tool_check && tool=1
+      choice=""
+      if have_gtk_menu; then
+        choice="$(gtk_menu "$installed" "$freq" "$tool")" || choice=""
+      fi
+      [[ -z "$choice" ]] && choice="$(zenity_menu "$installed" "$freq" "$tool")"
+      case "$choice" in
+        install|install-share)
+          share=(); dir=""
+          if [[ "$choice" == "install-share" ]]; then
             dir="$(zenity --file-selection --directory --title="Choose a folder to share with Claude" 2>/dev/null)" || continue
             share=(--share "$dir")
           fi
           gui_question "This will:\n\n• install <b>distrobox</b>/<b>podman</b> if missing (asks for your password)\n• create an Ubuntu container and install Anthropic's <b>official, signed</b> Claude app in it\n• add <b>Claude</b> to your app menu${dir:+\n• let the app access <b>$dir</b>}\n\nContinue?" || continue
           run_with_progress "Installing Claude Desktop… (a few minutes on first run)" --install "${share[@]}" || continue
           ;;
-        "Update now")
+        update)
           run_with_progress "Updating Claude Desktop…" --update --full || continue
           ;;
-        "Settings…")
-          # Combo boxes have no "default" option in zenity: put the current value first.
-          cur="Off"; timer_enabled && cur="$(timer_frequency)" && cur="${cur^}"
-          opts="$cur"
-          for o in Off Daily Weekly Monthly; do [[ "$o" == "$cur" ]] || opts+="|$o"; done
-          sel="$(zenity --forms --width=460 --title="$GUI_TITLE" \
-                   --text="Auto-update keeps Claude and the container's security patches current in the background (systemd user timer; you get a notification when a new version lands)." \
-                   --add-combo="Auto-update" --combo-values="$opts" --ok-label="Apply" 2>/dev/null)" || continue
-          [[ -z "$sel" || "$sel" == "$cur" ]] && continue
-          if [[ "$sel" == "Off" ]]; then
+        auto:*)
+          sel="${choice#auto:}"
+          [[ "$sel" == "$freq" ]] && continue   # picked the current schedule
+          if [[ "$sel" == "off" ]]; then
             run_with_progress "Turning auto-update off…" --remove-timer
           else
-            run_with_progress "Setting auto-update to ${sel,,}…" --install-timer --every "${sel,,}"
+            tflags=(); [[ $tool -eq 1 ]] && tflags=(--tool-check)   # keep the switch as it was
+            run_with_progress "Setting auto-update to ${sel}…" --install-timer --every "$sel" "${tflags[@]}"
           fi
           ;;
-        "Advanced…")
-          adv="$(gui_buttons "Maintenance and removal." \
-                   "Repair app-menu entry" "Rebuild container" "Check for a newer setup tool" "Remove Claude Desktop…" "Back")"
-          case "$adv" in
-            "Repair app-menu entry")
-              run_with_progress "Rebuilding the app-menu entry…" --refresh-launcher && \
-                gui_info "Done. Log out and back in if the dock still shows the old icon."
-              ;;
-            "Rebuild container")
-              gui_question "Rebuild the Claude container?\n\nThe app is closed and its container re-created with the current settings, so your <b>Documents, Desktop, Pictures</b> (read-only) and <b>Downloads</b> folders become visible to it — that is what makes <b>Attach file</b> and <b>drag-and-drop</b> work.\n\nYour login and chats are <b>kept</b>. Takes a few minutes." || continue
-              run_with_progress "Rebuilding the Claude container…" --recreate && \
-                gui_info "Done. Launch Claude again — attaching files and dropping them onto the window now work."
-              ;;
-            "Check for a newer setup tool")
-              "$SELF" --check-self-update --gui || true
-              ;;
-            "Remove Claude Desktop…")
-              gui_question "Remove Claude Desktop?\n\nThis deletes the container, the app-menu entry and the auto-update timer.\nYour login and chat data (in $BOX_HOME) are <b>kept</b> unless you choose to delete them next." || continue
-              purge=()
-              if zenity --question --width=460 --title="$GUI_TITLE" --icon=dialog-warning \
-                   --text="Also delete your Claude login and local data?\n\n<b>$BOX_HOME</b>\n\nThis cannot be undone." \
-                   --ok-label="Delete data too" --cancel-label="Keep data" 2>/dev/null; then
-                purge=(--purge)
-              fi
-              run_with_progress "Removing Claude Desktop…" --remove "${purge[@]}" && \
-                gui_info "Claude Desktop has been removed."
-              ;;
-          esac
+        toolcheck:*)
+          [[ "$freq" == "off" ]] && continue   # only meaningful with a schedule
+          if [[ "$choice" == "toolcheck:on" ]]; then
+            run_with_progress "Enabling the scheduled tool-update check…" --install-timer --every "$freq" --tool-check
+          else
+            run_with_progress "Disabling the scheduled tool-update check…" --install-timer --every "$freq"
+          fi
           ;;
-        "Check for a newer setup tool")
+        self-check)
           "$SELF" --check-self-update --gui || true
           ;;
+        repair)
+          run_with_progress "Rebuilding the app-menu entry…" --refresh-launcher && \
+            gui_info "Done. Log out and back in if the dock still shows the old icon."
+          ;;
+        rebuild)
+          gui_question "Rebuild the Claude container?\n\nThe app is closed and its container re-created with the current settings, so your <b>Documents, Desktop, Pictures</b> (read-only) and <b>Downloads</b> folders become visible to it — that is what makes <b>Attach file</b> and <b>drag-and-drop</b> work.\n\nYour login and chats are <b>kept</b>. Takes a few minutes." || continue
+          run_with_progress "Rebuilding the Claude container…" --recreate && \
+            gui_info "Done. Launch Claude again — attaching files and dropping them onto the window now work."
+          ;;
+        remove)
+          gui_question "Remove Claude Desktop?\n\nThis deletes the container, the app-menu entry and the auto-update timer.\nYour login and chat data (in $BOX_HOME) are <b>kept</b> unless you choose to delete them next." || continue
+          purge=()
+          if zenity --question --width=460 --title="$GUI_TITLE" --icon=dialog-warning \
+               --text="Also delete your Claude login and local data?\n\n<b>$BOX_HOME</b>\n\nThis cannot be undone." \
+               --ok-label="Delete data too" --cancel-label="Keep data" 2>/dev/null; then
+            purge=(--purge)
+          fi
+          run_with_progress "Removing Claude Desktop…" --remove "${purge[@]}" && \
+            gui_info "Claude Desktop has been removed."
+          ;;
+        again) : ;;
         *) exit 0 ;;
       esac
     done
     ;;
-
   *)
     die "internal error: unknown action '$ACTION'"
     ;;
