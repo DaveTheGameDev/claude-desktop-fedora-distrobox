@@ -194,9 +194,10 @@ Actions:
   --version        Print the setup tool version and exit.
 
 GUI options:
-  --gui            Use desktop dialogs (zenity) instead of terminal prompts.
-                   Alone, opens the "Claude Desktop Setup" menu; combined with
-                   an action (e.g. --update --gui) runs that action with dialogs.
+  --gui            Use the graphical setup app instead of terminal prompts.
+                   Alone, opens the "Claude Desktop Setup" window (native GTK4,
+                   falling back to zenity buttons); combined with an action
+                   (e.g. --update --gui) runs that action with zenity dialogs.
   --tool-check     With --install-timer: the timer also asks GitHub whether a
                    newer setup tool exists and shows a notification.
                    Notify-only — it never installs anything by itself.

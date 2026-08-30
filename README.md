@@ -307,8 +307,9 @@ Add `--purge` only if you also want the sandbox home gone.
 | `--remove --purge` | …and delete the sandbox home (login/data). |
 | `--install-timer` | Enable the auto-update systemd user timer (weekly by default). |
 | `--every daily\|weekly\|monthly` | With `--install-timer`: how often it runs. Re-run to change. |
+| `--tool-check` | With `--install-timer`: the timer also asks GitHub whether a newer setup tool exists and sends a desktop notification. Notify-only — nothing installs by itself. |
 | `--remove-timer` | Disable and remove that timer. |
-| `--gui` | Use zenity dialogs instead of terminal prompts. Alone it opens the **Claude Desktop Setup** menu; with an action (`--update --gui`) it runs that action with dialogs. |
+| `--gui` | Use the graphical setup app instead of terminal prompts. Alone it opens the **Claude Desktop Setup** window (native GTK4; falls back to stacked zenity buttons without `python3-gobject`/`libadwaita`); with an action (`--update --gui`) it runs that action with zenity progress dialogs. |
 | `--notify` | Desktop notification when an update finishes (the timer uses this). |
 | `--check-self-update` | Ask GitHub Releases once whether a newer setup tool exists. RPM installs: offer to download, verify (`SHA256SUMS`) and install it via polkit. Git checkouts: offer to open the download page. |
 | `--self-update` | Same, but installs a newer release without asking first. |
@@ -340,6 +341,10 @@ Type=oneshot
 ExecStart=/bin/bash /path/to/install-claude-desktop-distrobox.sh --update --full --notify --name claude-desktop
 TimeoutStartSec=1800
 ```
+
+With the **Also check for setup-tool updates** switch (`--install-timer --tool-check`) the service
+gets a second `ExecStart=` line running `--self-check-notify`, which asks GitHub Releases for a
+newer setup tool and sends a notification — it never installs anything.
 
 **`claude-desktop-update.timer`**
 ```ini
