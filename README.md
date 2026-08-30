@@ -86,9 +86,11 @@ The installer (`install-claude-desktop-distrobox.sh`):
 
 **What the hardening protects**
 
-- ✅ The app's file dialogs, config, cache, and any indexing see **only the sandbox home** plus
-  folders you explicitly `--share`. Your `~/.ssh`, `~/.gnupg`, `~/.mozilla`, `~/Documents` are not
-  presented to it.
+- ✅ The app's file dialogs, config, cache, and any indexing see **only the sandbox home**, your
+  standard user folders (`~/Documents`, `~/Desktop`, `~/Pictures` **read-only**; `~/Downloads`
+  read-write — needed so "Attach file" and drag-and-drop work, see below) and folders you
+  explicitly `--share`. Your `~/.ssh`, `~/.gnupg`, `~/.mozilla`, browser profiles and everything
+  else in your home are not presented to it. Pass `--no-user-dirs` to hide the standard folders too.
 - ✅ The container has its **own network namespace** — it can't reach your host's `localhost` services.
 - ✅ Runs **rootless** (no host root; podman user namespaces).
 
@@ -252,7 +254,9 @@ Add `--purge` only if you also want the sandbox home gone.
 | `--notify` | Desktop notification when an update finishes (the timer uses this). |
 | `--check-self-update` | Ask GitHub Releases once whether a newer setup tool exists; offer to open the download page. |
 | `--version` | Print the setup tool version. |
-| `--share <dir>` | Expose a host directory to the app (repeatable). |
+| `--share <dir>` | Expose a host directory to the app (repeatable, read-write). |
+| `--user-dirs` / `--no-user-dirs` | Expose (default) / hide `~/Documents`, `~/Desktop`, `~/Pictures` (read-only) and `~/Downloads` (read-write) at their real paths. |
+| `--recreate` | Rebuild the container with the current options (keeps login and data). Needed after changing `--share` / `--user-dirs`, since bind mounts are fixed at creation. |
 | `--full-home` | **Opt out** of home isolation (mount your real `$HOME`). |
 | `--share-net` | **Opt out** of network isolation (share the host network). |
 | `--box-home <dir>` | Where the sandbox home lives (default `~/.local/share/claude-desktop-box`). |
@@ -312,6 +316,11 @@ your session bus (`notify-send`); if none is reachable the run is still fully lo
 - **No window appears** — the app renders under Wayland/XWayland; `wmctrl` won't always list it.
   Confirm it's alive with `podman exec claude-desktop pgrep -fc claude-desktop` (expect several
   processes). If it truly won't show, try `--sandbox` off (default) and check `journalctl --user`.
+- **Laptop woke up on a different network and Claude is offline** — with the isolated network
+  namespace, `pasta` copies the host's IP address once, when the container starts, and never
+  updates it. The launcher now checks for this on every launch and restarts the container when the
+  address has changed (a notification tells you). If Claude was still open at the time it only
+  warns, because restarting would close the window: quit Claude and launch it again.
 - **Sign-in doesn't complete** — rare, since login uses the `claude://` scheme, not a localhost
   callback. If it happens, relax the network: `--remove` then reinstall with `--share-net`.
 - **Updated but the app still shows the old version / old models** — the old process was
@@ -328,8 +337,15 @@ your session bus (`notify-send`); if none is reachable the run is still fully lo
   Note that live read needs `xprop` and an X11/XWayland window. Under a native Wayland session —
   the default on Fedora GNOME, where `xlsclients` lists nothing for Claude — it is skipped and the
   class derived from the package is used instead, which is normally the correct one anyway.
-- **Cowork/Code can't see my files** — that's the isolation working. Reinstall with
-  `--share <dir>` for the folders you want it to access.
+- **"Attach file" can't find my documents / drag-and-drop does nothing** — the app receives
+  *host* paths (a drop from Files is a `file:///home/you/Documents/…` URI). With an isolated home
+  those paths don't exist inside the container, so the import silently fails. The
+  installer mounts `~/Documents`, `~/Desktop`, `~/Pictures` (read-only) and `~/Downloads` at their
+  real paths, which fixes both. Containers created by a pre-release build need a one-off rebuild:
+  `./install-claude-desktop-distrobox.sh --recreate` (or **Rebuild the container** in the GUI) —
+  login and chats are kept. Files elsewhere still need `--share <dir>`.
+- **Cowork/Code can't see my files** — that's the isolation working. Re-create with
+  `--recreate --share <dir>` for the folders you want it to access.
 - **Benign log noise** — `Failed to connect to ... system_bus_socket` and missing
   `canberra/pk-gtk-module` are harmless (host power integration & optional GTK modules).
 
