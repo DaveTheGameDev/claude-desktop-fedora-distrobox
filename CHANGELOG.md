@@ -1,9 +1,15 @@
 # Changelog
 
-## Unreleased
+## 1.1.0 — 2026-08-30
 
 - **Auto-update frequency is configurable**: `--install-timer --every daily|weekly|monthly`
-  (weekly stays the default), and a *Change auto-update frequency* entry in Claude Desktop Setup.
+  (weekly stays the default).
+- **Claude Desktop Setup redesigned**: a plain button window (*Update now / Settings… /
+  Advanced… / Close*) instead of nested radio lists. *Settings…* has an **Auto-update**
+  drop-down (Off / Daily / Weekly / Monthly); maintenance and removal live under *Advanced…*.
+- **Right-click the Claude icon → "Claude Desktop Settings"** opens the setup window directly
+  (new desktop action next to *Check for updates*). Existing installs get it after
+  *Advanced… → Repair app-menu entry* (or `--refresh-launcher`) and a re-login.
 - README: "How is this different?" comparison, setup-menu screenshot; added `CONTRIBUTING.md`
   and `SECURITY.md`.
 

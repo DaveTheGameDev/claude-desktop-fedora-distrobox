@@ -132,30 +132,31 @@ The isolation here is about *"don't casually hand my whole home to a networked a
 
 No terminal needed.
 
-<p align="center"><img src="docs/setup-menu.png" width="520" alt="Claude Desktop Setup: install / update / auto-update / remove menu"></p>
+<p align="center"><img src="docs/setup-menu.png" width="520" alt="Claude Desktop Setup: Update now / Settings / Advanced"></p>
 
 1. Download the latest **`claude-desktop-distrobox-*.noarch.rpm`** from the
    [Releases page](https://github.com/DaveTheGameDev/claude-desktop-fedora-distrobox/releases/latest).
 2. **Double-click** it — GNOME Software opens; click **Install**. This pulls in `distrobox`,
    `podman` and `zenity` if you don't have them. (Or: `sudo dnf install ./claude-desktop-distrobox-*.rpm`.)
-3. Open **Claude Desktop Setup** from your app menu and choose **Install Claude Desktop**.
-   Want to let Claude (Cowork / Code) work on one of your folders? Pick *Install and share one
-   folder* instead. The first run downloads a few hundred MB and takes a few minutes.
+3. Open **Claude Desktop Setup** from your app menu and click **Install…**.
+   Want to let Claude (Cowork / Code) work on one of your folders? Pick *Also share one folder*
+   in the next step. The first run downloads a few hundred MB and takes a few minutes.
 4. Launch **Claude** from the app menu and sign in.
 
 **Updating, in the GUI:**
 
 - Right-click the **Claude** icon (dock or app grid) → **Check for updates**. It updates the app and
   the container's security patches, and if Claude is running the old version it offers to restart it.
-- Or open **Claude Desktop Setup** → **Update Claude now**.
-- Turn on **auto-update** in Claude Desktop Setup: a systemd *user* timer runs the update
-  (weekly by default — switch to **daily** or **monthly** from the same menu) and shows a desktop
-  notification when a new version landed ("restart Claude to apply").
-- **Check for a newer version of this setup tool** (also in Claude Desktop Setup) asks GitHub once
+- Or right-click the **Claude** icon → **Claude Desktop Settings** (same as opening **Claude Desktop
+  Setup** from the app menu) → **Update now**.
+- **Settings…** → **Auto-update** drop-down: *Off*, *Daily*, *Weekly* (default) or *Monthly*. A systemd
+  *user* timer runs the update and shows a desktop notification when a new version landed
+  ("restart Claude to apply").
+- **Advanced… → Check for a newer setup tool** asks GitHub once
   and offers to open the download page. That is the *only* time this tool ever contacts GitHub — it
   never checks in the background.
 
-**Removing:** Claude Desktop Setup → **Remove Claude Desktop**. Your login/chat data are kept unless
+**Removing:** Claude Desktop Setup → **Advanced… → Remove Claude Desktop…**. Your login/chat data are kept unless
 you tick *Delete data too*. Then `sudo dnf remove claude-desktop-distrobox` if you also want the
 setup tool gone.
 
@@ -235,7 +236,7 @@ and launching again would just refocus the old window. If the app is running whe
 version lands, `--update` offers to restart it for you (stopping the container; your
 data/login are untouched — just relaunch afterwards).
 
-In the GUI: right-click the Claude icon → **Check for updates**, or use **Claude Desktop Setup**.
+In the GUI: right-click the Claude icon → **Check for updates**, or **Claude Desktop Settings → Update now**.
 The same flow, with progress and result dialogs (`--update --full --gui`).
 
 **Automatically (recommended)** — a systemd *user* timer that runs `--update --full --notify`

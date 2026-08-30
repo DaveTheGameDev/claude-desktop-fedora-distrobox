@@ -49,7 +49,7 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 # Config / defaults
 # ---------------------------------------------------------------------------
-VERSION="1.0.0"                # keep in sync with the git tag vX.Y.Z (CI enforces)
+VERSION="1.1.0"                # keep in sync with the git tag vX.Y.Z (CI enforces)
 REPO_SLUG="DaveTheGameDev/claude-desktop-fedora-distrobox"
 RELEASES_URL="https://github.com/$REPO_SLUG/releases/latest"
 RELEASES_API="https://api.github.com/repos/$REPO_SLUG/releases/latest"
@@ -827,15 +827,22 @@ WRAP
   # 3b) A right-click "Check for updates" action on the launcher, pointing back
   #     at this very script (RPM: /usr/bin/claude-desktop-setup; git clone: its
   #     path). Runs the update with dialogs, so no terminal is ever needed.
-  local update_exec
+  #     A second action, "Settings", opens the full setup menu.
+  local update_exec settings_exec
   update_exec="$(printf '%q --update --full --gui --name %q' "$SELF" "$NAME")"
-  sed -i -e '/^\[Desktop Action Update\]/,/^$/d' "$HOST_DESKTOP"   # drop a stale copy
-  if grep -q '^Actions=' "$HOST_DESKTOP"; then
-    grep -q '^Actions=.*\bUpdate;' "$HOST_DESKTOP" || sed -i -e 's|^Actions=\(.*\)$|Actions=\1Update;|' "$HOST_DESKTOP"
-  else
-    sed -i -e "0,/^\[Desktop Entry\]/s|^\[Desktop Entry\]|[Desktop Entry]\nActions=Update;|" "$HOST_DESKTOP"
-  fi
+  settings_exec="$(printf '%q --gui --name %q' "$SELF" "$NAME")"
+  sed -i -e '/^\[Desktop Action Update\]/,/^$/d' \
+         -e '/^\[Desktop Action Settings\]/,/^$/d' "$HOST_DESKTOP"   # drop stale copies
+  local act
+  for act in Update Settings; do
+    if grep -q '^Actions=' "$HOST_DESKTOP"; then
+      grep -q "^Actions=.*\b${act};" "$HOST_DESKTOP" || sed -i -e "s|^Actions=\(.*\)\$|Actions=\1${act};|" "$HOST_DESKTOP"
+    else
+      sed -i -e "0,/^\[Desktop Entry\]/s|^\[Desktop Entry\]|[Desktop Entry]\nActions=${act};|" "$HOST_DESKTOP"
+    fi
+  done
   printf '\n[Desktop Action Update]\nName=Check for updates\nExec=%s\n' "$update_exec" >> "$HOST_DESKTOP"
+  printf '\n[Desktop Action Settings]\nName=Claude Desktop Settings\nExec=%s\n' "$settings_exec" >> "$HOST_DESKTOP"
 
   chmod +x "$HOST_DESKTOP" 2>/dev/null || true
   command -v update-desktop-database >/dev/null 2>&1 && \
@@ -1183,98 +1190,102 @@ case "$ACTION" in
     ;;
 
   gui-menu)
-    # The "Claude Desktop Setup" app. Every row re-invokes this script with the
-    # matching CLI flags behind a progress dialog, so GUI and CLI share one
-    # code path. Loops until the user cancels.
+    # The "Claude Desktop Setup" app. Plain buttons for actions, a drop-down
+    # for settings; radio lists only where there is a genuine choice. Every
+    # button re-invokes this script with the matching CLI flags behind a
+    # progress dialog, so GUI and CLI share one code path. Loops until closed.
     timer_enabled() { systemctl --user is-enabled "${TIMER_NAME}.timer" >/dev/null 2>&1; }
+    # gui_buttons TEXT BUTTON... : show TEXT with one button per argument
+    # (the last one is the "close" button); print the label that was pressed.
+    gui_buttons() {
+      local text="$1"; shift
+      local -a extra=()
+      local b
+      for b in "$@"; do extra+=(--extra-button="$b"); done
+      zenity --question --switch --width=520 --title="$GUI_TITLE" --icon=dialog-information \
+             --text="$text" "${extra[@]}" 2>/dev/null || true
+      # zenity exits 1 for every --extra-button press; the label on stdout is
+      # what matters, so never let that status trip set -e.
+    }
     while :; do
-      declare -a rows=()
       if container_exists "$NAME"; then
-        status="Claude Desktop is <b>installed</b> (container '$NAME')."
         if timer_enabled; then
-          status+="\nAuto-update: <b>on</b> ($(timer_frequency))."
+          freq="$(timer_frequency)"
+          status="Claude Desktop is <b>installed</b>.\nAuto-update: <b>on</b>, ${freq}."
         else
-          status+="\nAuto-update: <b>off</b>."
+          status="Claude Desktop is <b>installed</b>.\nAuto-update: <b>off</b>."
         fi
-        rows+=(TRUE  update   "Update Claude now (app + container security patches)")
-        if timer_enabled; then
-          rows+=(FALSE timer-freq "Change auto-update frequency (daily / weekly / monthly)")
-          rows+=(FALSE timer-off  "Turn OFF auto-update")
-        else
-          rows+=(FALSE timer-on   "Turn ON weekly auto-update (recommended)")
-        fi
-        rows+=(FALSE self     "Check for a newer version of this setup tool")
-        rows+=(FALSE refresh  "Repair the app-menu entry / icon")
-        rows+=(FALSE recreate "Rebuild the container (fixes file import / drag-and-drop; keeps your login)")
-        rows+=(FALSE remove   "Remove Claude Desktop")
+        choice="$(gui_buttons "$status" "Update now" "Settings…" "Advanced…" "Close")"
       else
-        status="Claude Desktop is <b>not installed</b> yet."
-        rows+=(TRUE  install       "Install Claude Desktop (recommended: privacy-hardened)")
-        rows+=(FALSE install-share "Install and share one folder with the app (for Cowork / Code)")
-        rows+=(FALSE self          "Check for a newer version of this setup tool")
+        status="Claude Desktop is <b>not installed</b> yet.\n\nInstall Anthropic's official, signed app in a privacy-hardened container. Your real home stays hidden; the app gets its own private folder and network. First run downloads a few hundred MB."
+        choice="$(gui_buttons "$status" "Install…" "Check for a newer setup tool" "Close")"
       fi
-      choice="$(zenity --list --radiolist --width=560 --height=360 --title="$GUI_TITLE" \
-                  --text="$status\n\nWhat would you like to do?" \
-                  --column="" --column="id" --column="Action" --hide-column=2 --print-column=2 \
-                  "${rows[@]}" 2>/dev/null)" || exit 0
       case "$choice" in
-        install)
-          gui_question "This will:\n\n• install <b>distrobox</b>/<b>podman</b> if missing (asks for your password)\n• create an Ubuntu container and install Anthropic's <b>official, signed</b> Claude app in it\n• add <b>Claude</b> to your app menu\n\nThe app gets its own private folder and network namespace; your real home stays hidden. First run downloads a few hundred MB.\n\nContinue?" || continue
-          run_with_progress "Installing Claude Desktop… (a few minutes on first run)" --install || continue
+        "Install…")
+          how="$(zenity --list --radiolist --width=520 --height=220 --title="$GUI_TITLE" \
+                   --text="How should Claude be installed?" \
+                   --column="" --column="id" --column="Option" --hide-column=2 --print-column=2 \
+                   TRUE  plain "Privacy-hardened (recommended)" \
+                   FALSE share "Also share one folder with the app (for Cowork / Code)" 2>/dev/null)" || continue
+          share=()
+          if [[ "$how" == "share" ]]; then
+            dir="$(zenity --file-selection --directory --title="Choose a folder to share with Claude" 2>/dev/null)" || continue
+            share=(--share "$dir")
+          fi
+          gui_question "This will:\n\n• install <b>distrobox</b>/<b>podman</b> if missing (asks for your password)\n• create an Ubuntu container and install Anthropic's <b>official, signed</b> Claude app in it\n• add <b>Claude</b> to your app menu${dir:+\n• let the app access <b>$dir</b>}\n\nContinue?" || continue
+          run_with_progress "Installing Claude Desktop… (a few minutes on first run)" --install "${share[@]}" || continue
           ;;
-        install-share)
-          dir="$(zenity --file-selection --directory --title="Choose a folder to share with Claude" 2>/dev/null)" || continue
-          gui_question "Install Claude Desktop and let it access:\n\n<b>$dir</b>\n\nEverything else in your home stays hidden. Continue?" || continue
-          run_with_progress "Installing Claude Desktop… (a few minutes on first run)" --install --share "$dir" || continue
-          ;;
-        update)
+        "Update now")
           run_with_progress "Updating Claude Desktop…" --update --full || continue
           ;;
-        timer-on)
-          run_with_progress "Enabling weekly auto-update…" --install-timer && \
-            gui_info "Weekly auto-update is <b>on</b>.\n\nClaude and the container's security patches are refreshed every week; you get a desktop notification when a new version lands."
+        "Settings…")
+          # Combo boxes have no "default" option in zenity: put the current value first.
+          cur="Off"; timer_enabled && cur="$(timer_frequency)" && cur="${cur^}"
+          opts="$cur"
+          for o in Off Daily Weekly Monthly; do [[ "$o" == "$cur" ]] || opts+="|$o"; done
+          sel="$(zenity --forms --width=460 --title="$GUI_TITLE" \
+                   --text="Auto-update keeps Claude and the container's security patches current in the background (systemd user timer; you get a notification when a new version lands)." \
+                   --add-combo="Auto-update" --combo-values="$opts" --ok-label="Apply" 2>/dev/null)" || continue
+          [[ -z "$sel" || "$sel" == "$cur" ]] && continue
+          if [[ "$sel" == "Off" ]]; then
+            run_with_progress "Turning auto-update off…" --remove-timer
+          else
+            run_with_progress "Setting auto-update to ${sel,,}…" --install-timer --every "${sel,,}"
+          fi
           ;;
-        timer-freq)
-          cur="$(timer_frequency)"
-          declare -a frows=()
-          for f in daily weekly monthly; do
-            if [[ "$f" == "$cur" ]]; then frows+=(TRUE "$f" "${f^} (current)"); else frows+=(FALSE "$f" "${f^}"); fi
-          done
-          freq="$(zenity --list --radiolist --width=420 --height=260 --title="$GUI_TITLE" \
-                    --text="How often should Claude and the container's security patches be updated?" \
-                    --column="" --column="id" --column="Frequency" --hide-column=2 --print-column=2 \
-                    "${frows[@]}" 2>/dev/null)" || continue
-          [[ -z "$freq" || "$freq" == "$cur" ]] && continue
-          run_with_progress "Setting auto-update to $freq…" --install-timer --every "$freq" && \
-            gui_info "Auto-update now runs <b>$freq</b>."
+        "Advanced…")
+          adv="$(gui_buttons "Maintenance and removal." \
+                   "Repair app-menu entry" "Rebuild container" "Check for a newer setup tool" "Remove Claude Desktop…" "Back")"
+          case "$adv" in
+            "Repair app-menu entry")
+              run_with_progress "Rebuilding the app-menu entry…" --refresh-launcher && \
+                gui_info "Done. Log out and back in if the dock still shows the old icon."
+              ;;
+            "Rebuild container")
+              gui_question "Rebuild the Claude container?\n\nThe app is closed and its container re-created with the current settings, so your <b>Documents, Desktop, Pictures</b> (read-only) and <b>Downloads</b> folders become visible to it — that is what makes <b>Attach file</b> and <b>drag-and-drop</b> work.\n\nYour login and chats are <b>kept</b>. Takes a few minutes." || continue
+              run_with_progress "Rebuilding the Claude container…" --recreate && \
+                gui_info "Done. Launch Claude again — attaching files and dropping them onto the window now work."
+              ;;
+            "Check for a newer setup tool")
+              "$SELF" --check-self-update --gui || true
+              ;;
+            "Remove Claude Desktop…")
+              gui_question "Remove Claude Desktop?\n\nThis deletes the container, the app-menu entry and the auto-update timer.\nYour login and chat data (in $BOX_HOME) are <b>kept</b> unless you choose to delete them next." || continue
+              purge=()
+              if zenity --question --width=460 --title="$GUI_TITLE" --icon=dialog-warning \
+                   --text="Also delete your Claude login and local data?\n\n<b>$BOX_HOME</b>\n\nThis cannot be undone." \
+                   --ok-label="Delete data too" --cancel-label="Keep data" 2>/dev/null; then
+                purge=(--purge)
+              fi
+              run_with_progress "Removing Claude Desktop…" --remove "${purge[@]}" && \
+                gui_info "Claude Desktop has been removed."
+              ;;
+          esac
           ;;
-        timer-off)
-          run_with_progress "Disabling auto-update…" --remove-timer && \
-            gui_info "Auto-update is <b>off</b>."
-          ;;
-        self)
+        "Check for a newer setup tool")
           "$SELF" --check-self-update --gui || true
           ;;
-        refresh)
-          run_with_progress "Rebuilding the app-menu entry…" --refresh-launcher && \
-            gui_info "Done. Log out and back in if the dock still shows the old icon."
-          ;;
-        recreate)
-          gui_question "Rebuild the Claude container?\n\nThe app is closed and its container re-created with the current settings, so your <b>Documents, Desktop, Pictures</b> (read-only) and <b>Downloads</b> folders become visible to it — that is what makes <b>Attach file</b> and <b>drag-and-drop</b> work.\n\nYour login and chats are <b>kept</b>. Takes a few minutes." || continue
-          run_with_progress "Rebuilding the Claude container…" --recreate && \
-            gui_info "Done. Launch Claude again — attaching files and dropping them onto the window now work."
-          ;;
-        remove)
-          gui_question "Remove Claude Desktop?\n\nThis deletes the container, the app-menu entry and the auto-update timer.\nYour login and chat data (in $BOX_HOME) are <b>kept</b> unless you choose to delete them next." || continue
-          purge=()
-          if zenity --question --width=460 --title="$GUI_TITLE" --icon=dialog-warning \
-               --text="Also delete your Claude login and local data?\n\n<b>$BOX_HOME</b>\n\nThis cannot be undone." \
-               --ok-label="Delete data too" --cancel-label="Keep data" 2>/dev/null; then
-            purge=(--purge)
-          fi
-          run_with_progress "Removing Claude Desktop…" --remove "${purge[@]}" && \
-            gui_info "Claude Desktop has been removed."
-          ;;
+        *) exit 0 ;;
       esac
     done
     ;;
