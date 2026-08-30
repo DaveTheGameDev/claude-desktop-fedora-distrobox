@@ -17,6 +17,7 @@ sign-in, the works — while keeping it out of your real home directory and off 
 
 ## Contents
 
+- [How is this different?](#how-is-this-different)
 - [Why](#why)
 - [How it works](#how-it-works)
 - [Security &amp; trust model](#security--trust-model)
@@ -31,8 +32,27 @@ sign-in, the works — while keeping it out of your real home directory and off 
 - [Releasing (maintainers)](#releasing-maintainers)
 - [Troubleshooting](#troubleshooting)
 - [Limitations &amp; honest caveats](#limitations--honest-caveats)
+- [Contributing &amp; security reports](#contributing--security-reports)
 
 ---
+
+## How is this different?
+
+There are several ways to get Claude Desktop onto Fedora. Most of them **unpack Anthropic's `.deb`
+and repackage it** as an RPM, a Flatpak, or a snap. That works, but it means you're running a
+binary that someone else rebuilt, on a release schedule that someone else keeps up with.
+
+| | Repackaged RPM / Flatpak / snap | **This project** |
+|---|---|---|
+| **What you run** | A third party's rebuild of Anthropic's app | Anthropic's **own signed `.deb`**, installed unchanged from Anthropic's apt repo, key fingerprint verified first |
+| **Updates** | Whenever the packager gets around to it | **Anthropic's release channel**, directly — new versions arrive the moment Anthropic ships them, on a weekly timer if you want |
+| **Access to your home** | Usually everything (Flatpak: depends on the manifest) | **Real home hidden.** Sandbox home + `~/Documents`/`~/Pictures`/`~/Desktop` read-only, `~/Downloads` read-write, nothing else |
+| **Host network** | Shared | **Own network namespace** — can't talk to `localhost` services |
+| **Root at runtime** | Varies | **None** — rootless podman, user-level launcher and timer |
+
+If you just want the app and don't care about any of that, a repackaged build is fine and simpler.
+This project is for people who want the **genuine build, the official update path, and a
+least-privilege setup** — and are willing to have ~1 GB of Ubuntu container for it.
 
 ## Why
 
@@ -368,3 +388,8 @@ your session bus (`notify-send`); if none is reachable the run is still fully lo
 
 *Installs the official Claude Desktop app. Trademarks belong to Anthropic. This wrapper is provided
 as-is under the MIT license; do what you like with it.*
+
+## Contributing & security reports
+
+Bug reports and PRs: see [CONTRIBUTING.md](CONTRIBUTING.md).
+Found a security problem? Please report it **privately** — see [SECURITY.md](SECURITY.md).
