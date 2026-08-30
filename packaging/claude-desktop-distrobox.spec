@@ -13,6 +13,7 @@ Source0:        install-claude-desktop-distrobox.sh
 Source1:        claude-desktop-setup.desktop
 Source2:        README.md
 Source3:        LICENSE
+Source4:        claude-desktop-setup.svg
 
 BuildRequires:  desktop-file-utils
 Requires:       bash
@@ -45,6 +46,7 @@ cp -p %{SOURCE2} %{SOURCE3} .
 %install
 install -Dpm 0755 %{SOURCE0} %{buildroot}%{_bindir}/claude-desktop-setup
 install -Dpm 0644 %{SOURCE1} %{buildroot}%{_datadir}/applications/claude-desktop-setup.desktop
+install -Dpm 0644 %{SOURCE4} %{buildroot}%{_datadir}/icons/hicolor/scalable/apps/claude-desktop-setup.svg
 
 %check
 desktop-file-validate %{buildroot}%{_datadir}/applications/claude-desktop-setup.desktop
@@ -56,6 +58,7 @@ test "$(%{buildroot}%{_bindir}/claude-desktop-setup --version)" = "%{version}"
 %doc README.md
 %{_bindir}/claude-desktop-setup
 %{_datadir}/applications/claude-desktop-setup.desktop
+%{_datadir}/icons/hicolor/scalable/apps/claude-desktop-setup.svg
 
 %changelog
 %autochangelog

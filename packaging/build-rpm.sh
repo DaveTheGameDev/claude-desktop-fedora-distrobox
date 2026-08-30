@@ -23,6 +23,7 @@ topdir="${RPM_TOPDIR:-$(mktemp -d)}"
 mkdir -p "$topdir"/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
 cp "$root/install-claude-desktop-distrobox.sh" \
    "$root/packaging/claude-desktop-setup.desktop" \
+   "$root/packaging/icons/claude-desktop-setup.svg" \
    "$root/README.md" "$root/LICENSE" "$topdir/SOURCES/"
 
 # %autochangelog needs rpmautospec; substitute a plain entry when it is absent.

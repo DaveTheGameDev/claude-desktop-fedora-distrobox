@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Claude Desktop Setup now ships its own icon (the generic `system-software-install`
+  theme icon is missing in many icon themes, leaving a placeholder in the dock).
+
 ## 1.1.0 — 2026-08-30
 
 - **Auto-update frequency is configurable**: `--install-timer --every daily|weekly|monthly`
