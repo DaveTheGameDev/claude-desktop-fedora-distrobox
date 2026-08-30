@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.1.1 — 2026-08-30
 
 - **The setup tool can update itself**: *Advanced… → Check for a newer setup tool* (or
   `--check-self-update`) now offers to download the new release RPM, verify it against the
