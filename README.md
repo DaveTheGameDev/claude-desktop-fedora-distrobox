@@ -152,9 +152,11 @@ No terminal needed.
 - **Settings…** → **Auto-update** drop-down: *Off*, *Daily*, *Weekly* (default) or *Monthly*. A systemd
   *user* timer runs the update and shows a desktop notification when a new version landed
   ("restart Claude to apply").
-- **Advanced… → Check for a newer setup tool** asks GitHub once
-  and offers to open the download page. That is the *only* time this tool ever contacts GitHub — it
-  never checks in the background.
+- **Advanced… → Check for a newer setup tool** asks GitHub once. If a newer release exists and you
+  installed the RPM, it offers to download it, verify it against the release's `SHA256SUMS` and
+  install it (polkit asks for your password) — like an app-store update. From a git checkout it just
+  opens the download page. That is the *only* time this tool ever contacts GitHub — it never checks
+  in the background.
 
 **Removing:** Claude Desktop Setup → **Advanced… → Remove Claude Desktop…**. Your login/chat data are kept unless
 you tick *Delete data too*. Then `sudo dnf remove claude-desktop-distrobox` if you also want the
@@ -280,7 +282,8 @@ Add `--purge` only if you also want the sandbox home gone.
 | `--remove-timer` | Disable and remove that timer. |
 | `--gui` | Use zenity dialogs instead of terminal prompts. Alone it opens the **Claude Desktop Setup** menu; with an action (`--update --gui`) it runs that action with dialogs. |
 | `--notify` | Desktop notification when an update finishes (the timer uses this). |
-| `--check-self-update` | Ask GitHub Releases once whether a newer setup tool exists; offer to open the download page. |
+| `--check-self-update` | Ask GitHub Releases once whether a newer setup tool exists. RPM installs: offer to download, verify (`SHA256SUMS`) and install it via polkit. Git checkouts: offer to open the download page. |
+| `--self-update` | Same, but installs a newer release without asking first. |
 | `--version` | Print the setup tool version. |
 | `--share <dir>` | Expose a host directory to the app (repeatable, read-write). |
 | `--user-dirs` / `--no-user-dirs` | Expose (default) / hide `~/Documents`, `~/Desktop`, `~/Pictures` (read-only) and `~/Downloads` (read-write) at their real paths. |

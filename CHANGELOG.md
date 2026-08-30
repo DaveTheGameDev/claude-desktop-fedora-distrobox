@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **The setup tool can update itself**: *Advanced… → Check for a newer setup tool* (or
+  `--check-self-update`) now offers to download the new release RPM, verify it against the
+  release's `SHA256SUMS` and install it through polkit. New `--self-update` flag does it without
+  asking. Git checkouts still just get the download page.
 - Claude Desktop Setup now ships its own icon (the generic `system-software-install`
   theme icon is missing in many icon themes, leaving a placeholder in the dock).
 

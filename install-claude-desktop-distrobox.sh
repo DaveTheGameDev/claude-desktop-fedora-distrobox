@@ -185,7 +185,10 @@ Actions:
   --remove-timer   Disable and remove that timer.
   --check-self-update
                    Ask GitHub whether a newer release of this setup tool
-                   exists (only ever runs when you invoke it).
+                   exists (only ever runs when you invoke it). If you
+                   installed the RPM, offers to download, verify and
+                   install it (polkit password prompt).
+  --self-update    Same, but installs a newer release without asking.
   --version        Print the setup tool version and exit.
 
 GUI options:
@@ -419,6 +422,7 @@ while [[ $# -gt 0 ]]; do
     --remove-timer)   ACTION="remove-timer"; ACTION_SET=1; shift ;;
     --print-inner)    ACTION="print-inner"; ACTION_SET=1; shift ;;
     --check-self-update) ACTION="self-check"; ACTION_SET=1; shift ;;
+    --self-update)  ACTION="self-update"; ACTION_SET=1; shift ;;
     --version)      printf '%s\n' "$VERSION"; exit 0 ;;
     --gui)          GUI=1; shift ;;
     --notify)       NOTIFY=1; shift ;;
@@ -460,11 +464,58 @@ if [[ "$ACTION" == "install-timer" ]]; then install_timer; exit 0; fi
 if [[ "$ACTION" == "remove-timer" ]]; then remove_timer; exit 0; fi
 
 # ---------------------------------------------------------------------------
-# Self-update check: one request to the GitHub Releases API, only when the
-# user asks for it (menu row or --check-self-update). Never runs from the timer.
+# Self-update: one request to the GitHub Releases API, only when the user
+# asks for it (menu row, --check-self-update or --self-update). Never runs
+# from the timer. RPM installs can upgrade in place (download + sha256 check +
+# pkexec dnf); git checkouts are just pointed at the releases page.
 # ---------------------------------------------------------------------------
+# Installed from the RPM (as opposed to a git checkout)? Only then can we
+# upgrade in place: download the release RPM, verify it, hand it to dnf.
+rpm_installed() {
+  [[ "$SELF" == /usr/bin/claude-desktop-setup ]] && rpm -q claude-desktop-distrobox >/dev/null 2>&1
+}
+
+# $1 = release JSON. Downloads the .noarch.rpm + SHA256SUMS of that release,
+# checks the sum and installs through polkit (pkexec dnf). Returns non-zero on
+# any failure; callers report.
+self_update_install() {
+  local json="$1" ver="$2" rpm_url sums_url dir rpm_file
+  rpm_url="$(printf '%s' "$json" | sed -n 's/.*"browser_download_url":[[:space:]]*"\([^"]*\.noarch\.rpm\)".*/\1/p' | head -n1)"
+  sums_url="$(printf '%s' "$json" | sed -n 's/.*"browser_download_url":[[:space:]]*"\([^"]*\/SHA256SUMS\)".*/\1/p' | head -n1)"
+  if [[ -z "$rpm_url" || -z "$sums_url" ]]; then
+    warn "Release $ver has no RPM/SHA256SUMS asset — download it manually: $RELEASES_URL"
+    have_gui && gui_warn "Release $ver has no RPM attached yet.\n\nSee $RELEASES_URL"
+    return 1
+  fi
+  dir="$(mktemp -d)"
+  rpm_file="$dir/${rpm_url##*/}"
+  log "Downloading ${rpm_url##*/} ..."
+  if ! curl -fsSL --max-time 120 -o "$rpm_file" "$rpm_url" \
+     || ! curl -fsSL --max-time 30 -o "$dir/SHA256SUMS" "$sums_url"; then
+    warn "Download failed."; have_gui && gui_warn "Download failed. Try again later or fetch it from\n$RELEASES_URL"
+    rm -rf "$dir"; return 1
+  fi
+  if ! (cd "$dir" && sha256sum -c --ignore-missing --quiet SHA256SUMS >/dev/null 2>&1); then
+    warn "Checksum mismatch for ${rpm_file##*/} — not installing."
+    have_gui && gui_warn "The downloaded package did not match its checksum, so it was not installed."
+    rm -rf "$dir"; return 1
+  fi
+  log "Checksum OK. Installing (polkit will ask for your password) ..."
+  chmod 644 "$rpm_file"; chmod 755 "$dir"     # dnf runs as root but reads the file by path
+  if ! pkexec dnf install -y "$rpm_file"; then
+    warn "Install failed or was cancelled."
+    have_gui && gui_warn "The update was not installed (cancelled or dnf failed).\n\nThe package is at $rpm_file if you want to install it yourself."
+    return 1
+  fi
+  rm -rf "$dir"
+  log "Claude Desktop Setup updated to $ver."
+  have_gui && gui_info "Claude Desktop Setup was updated to version <b>$ver</b>.\n\nClose and reopen the setup window to use it."
+  return 0
+}
+
+# $1 = "check" (ask before installing) | "update" (install without asking)
 self_check() {
-  local json tag latest
+  local mode="${1:-check}" json tag latest
   log "Checking $REPO_SLUG for a newer release (you have $VERSION) ..."
   if ! json="$(curl -fsSL --max-time 10 -H 'Accept: application/vnd.github+json' "$RELEASES_API" 2>/dev/null)"; then
     warn "Could not reach GitHub (offline, or no release published yet)."
@@ -474,17 +525,34 @@ self_check() {
   tag="$(printf '%s' "$json" | sed -n 's/.*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
   latest="${tag#v}"
   [[ -n "$latest" ]] || { warn "Unexpected response from GitHub."; return 0; }
-  if [[ "$latest" != "$VERSION" && "$(printf '%s\n%s\n' "$VERSION" "$latest" | sort -V | tail -n1)" == "$latest" ]]; then
-    log "A newer version is available: $latest (you have $VERSION): $RELEASES_URL"
+  if [[ "$latest" == "$VERSION" || "$(printf '%s\n%s\n' "$VERSION" "$latest" | sort -V | tail -n1)" != "$latest" ]]; then
+    log "You have the latest version ($VERSION)."
+    have_gui && gui_info "Claude Desktop Setup is up to date (version $VERSION)."
+    return 0
+  fi
+  log "A newer version is available: $latest (you have $VERSION): $RELEASES_URL"
+  if rpm_installed && command -v pkexec >/dev/null 2>&1; then
+    local go=0
+    if [[ "$mode" == "update" ]]; then
+      go=1
+    elif have_gui; then
+      gui_question "Version <b>$latest</b> of Claude Desktop Setup is available (you have $VERSION).\n\nDownload and install it now? You will be asked for your password." && go=1
+    else
+      local reply
+      read -r -p "Download and install version $latest now? [Y/n] " reply || reply=""
+      [[ "$reply" =~ ^[Nn] ]] || go=1
+    fi
+    [[ $go -eq 1 ]] && { self_update_install "$json" "$latest" || return 1; }
+  else
+    # Git checkout (or no polkit): can't replace ourselves safely — point at the page.
+    log "You are not running the RPM; get the new version from $RELEASES_URL"
     if have_gui && gui_question "Version <b>$latest</b> of Claude Desktop Setup is available (you have $VERSION).\n\nOpen the download page?"; then
       xdg-open "$RELEASES_URL" >/dev/null 2>&1 &
     fi
-  else
-    log "You have the latest version ($VERSION)."
-    have_gui && gui_info "Claude Desktop Setup is up to date (version $VERSION)."
   fi
 }
-if [[ "$ACTION" == "self-check" ]]; then self_check; exit 0; fi
+if [[ "$ACTION" == "self-check" ]]; then self_check check; exit; fi
+if [[ "$ACTION" == "self-update" ]]; then self_check update; exit; fi
 
 # ---------------------------------------------------------------------------
 # Sanity checks
